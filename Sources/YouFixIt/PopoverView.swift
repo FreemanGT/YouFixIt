@@ -255,10 +255,10 @@ struct MainPane: View {
             }
             Spacer()
             if engine.mood != .paused {
-                Button { engine.pause(for: 3600) } label: { Image(systemName: "pause.circle") }
+                Button { engine.pause(for: 3600) } label: { Image(systemName: "pause.circle").font(.system(size: Theme.iconButton)).frame(width: 24, height: 24) }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help(Copy.pauseTip).accessibilityLabel(Copy.pauseTip)
             }
-            Button(action: openSettings) { Image(systemName: "gearshape") }
+            Button(action: openSettings) { Image(systemName: "gearshape").font(.system(size: Theme.iconButton)).frame(width: 24, height: 24) }
                 .buttonStyle(.plain).foregroundStyle(.secondary).help(Copy.settingsTip).accessibilityLabel(Copy.settingsTip)
         }
     }

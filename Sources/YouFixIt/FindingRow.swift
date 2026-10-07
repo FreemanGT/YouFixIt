@@ -18,14 +18,15 @@ struct FindingRow: View {
             icon
             VStack(alignment: .leading, spacing: Theme.hair) {
                 Text(finding.name).font(Theme.font(.bodyStrong)).lineLimit(1)
-                Text(why).font(Theme.font(.caption)).foregroundStyle(.secondary).lineLimit(1)
+                Text(why).font(Theme.font(.caption)).foregroundStyle(.secondary).lineLimit(2).fixedSize(horizontal: false, vertical: true)
             }
             .layoutPriority(1)
             Spacer(minLength: Theme.tight)
             trailing
         }
         .padding(.horizontal, Theme.gap)
-        .frame(height: Theme.cardHeight)
+        .padding(.vertical, Theme.cardPad)
+        .frame(minHeight: Theme.cardHeight)
         .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(hovering && pending ? Theme.cardHover : Theme.card))
         .opacity(pending && !selected ? 0.55 : 1)
         .contentShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))

@@ -197,7 +197,7 @@ enum Rules {
             // Headless Chrome still registers hidden windows with the window server; only being active counts.
             if let app = s.app(p.pid), app.active { return nil }
             guard s.at.timeIntervalSince(p.start) >= 900, avgCPU(p.pid, h, t.idle) < 0.02 else { return nil }
-            return Finding(id: "browser:\(p.pid):\(Int(p.start.timeIntervalSince1970))", keepKey: "headless:\(p.path)", group: .running, name: "\(p.name) (test copy)",
+            return Finding(id: "browser:\(p.pid):\(Int(p.start.timeIntervalSince1970))", keepKey: "headless:\(p.path)", group: .running, name: Copy.testCopy(p.name),
                            why: Copy.whyTestBrowser, bytes: s.footprint(of: p.pid), action: .sigterm(pid: p.pid, start: p.start),
                            undoLabel: nil, link: nil, iconPath: nil, symbol: "globe")
         }
@@ -364,7 +364,7 @@ enum Rules {
         }
         for p in s.procs.values where p.uid == Sampler.me && p.ppid != 1 && Sampler.browserNames.contains(p.name) {
             guard let args = s.args[p.pid], isHeadless(args), s.footprint(of: p.pid) >= 300 << 20 else { continue }
-            know("testbrowser:\(p.pid)", "\(p.name) (test copy)", Copy.liveTestBrowser, "globe", bytes: s.footprint(of: p.pid))
+            know("testbrowser:\(p.pid)", Copy.testCopy(p.name), Copy.liveTestBrowser, "globe", bytes: s.footprint(of: p.pid))
         }
         return out
     }

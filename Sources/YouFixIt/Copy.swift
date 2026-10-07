@@ -37,6 +37,8 @@ enum Copy {
     static func whyIdleApp(since: Date) -> String { "Untouched since \(Format.clock(since))" }
     static let whyDevServer = "From a finished coding session"
     static let whyTestBrowser = "Left by a script, holds no tabs"
+    /// "Google Chrome" reads as "Chrome (test copy)": the brand word only costs room.
+    static func testCopy(_ name: String) -> String { "\(name.replacingOccurrences(of: "Google ", with: "")) (test copy)" }
     static func whyDerivedData(_ bytes: UInt64) -> String { "Xcode rebuilds this when needed" }
     static let whyDeviceSupport = "Xcode copies these again when needed"
     static let whyDevCache = "Tools refill this as they need it"

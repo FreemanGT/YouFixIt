@@ -38,7 +38,6 @@ struct WelcomeView: View {
             }
             .toggleStyle(.switch)
             .tint(Theme.tint)
-            .controlSize(.small)
             .font(Theme.font(.body))
             .padding(.top, Theme.tight)
 

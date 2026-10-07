@@ -20,8 +20,8 @@ struct SettingsPane: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .font(Theme.font(.caption))
+                .foregroundStyle(Theme.tint)
+                .font(Theme.font(.body))
                 .keyboardShortcut(.cancelAction)
                 Spacer()
                 Text(Copy.settingsTip).font(Theme.font(.title))
@@ -34,20 +34,27 @@ struct SettingsPane: View {
                 HStack {
                     Toggle(Copy.softSounds, isOn: $softSounds)
                     Spacer()
-                    Button(Copy.playSample) { Sound.play(.done, force: true) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+                    Button(Copy.playSample) { Sound.play(.done, force: true) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.body))
                 }
                 VStack(alignment: .leading, spacing: Theme.hair) {
                     Toggle(Copy.notifications, isOn: Binding(get: { notifications }, set: { on in
                         notifications = on
                         if on { Notifier.shared.requestAuthorization() }
                     }))
-                    Text(Copy.notificationsCaption).font(Theme.font(.caption)).foregroundStyle(.secondary).padding(.leading, 20)
+                    Text(Copy.notificationsCaption).font(Theme.font(.caption)).foregroundStyle(.secondary)
                 }
+            }
+            .card()
+
+            VStack(alignment: .leading, spacing: Theme.row) {
+                Text(Copy.nudgeMe).font(Theme.font(.bodyStrong))
                 Picker(Copy.nudgeMe, selection: $nudgeMode) {
                     Text(Copy.nudgeStruggling).tag(Nudge.Mode.struggling.rawValue)
                     Text(Copy.nudgeDaily).tag(Nudge.Mode.daily.rawValue)
                     Text(Copy.nudgeNever).tag(Nudge.Mode.never.rawValue)
                 }
+                .pickerStyle(.radioGroup)
+                .labelsHidden()
             }
             .card()
 
@@ -55,7 +62,7 @@ struct SettingsPane: View {
                 Text(Copy.alwaysKeep).font(Theme.font(.bodyStrong))
                 Text(Copy.alwaysKeepCaption).font(Theme.font(.caption)).foregroundStyle(.secondary)
                 if engine.keep.isEmpty {
-                    Text(Copy.alwaysKeepEmpty).font(Theme.font(.caption)).foregroundStyle(.tertiary).padding(.top, Theme.hair)
+                    Text(Copy.alwaysKeepEmpty).font(Theme.font(.caption)).foregroundStyle(.secondary).padding(.top, Theme.hair)
                 } else {
                     ForEach(engine.keep.sorted(by: { $0.value < $1.value }), id: \.key) { key, name in
                         HStack {
@@ -78,7 +85,6 @@ struct SettingsPane: View {
         }
         .toggleStyle(.switch)
         .tint(Theme.tint)
-        .controlSize(.small)
         .font(Theme.font(.body))
         .padding(Theme.edge)
     }

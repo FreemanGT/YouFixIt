@@ -43,7 +43,7 @@ enum Theme {
 
     static func font(_ step: Step) -> Font {
         switch step {
-        case .caption: .system(size: 11).monospacedDigit()
+        case .caption: .system(size: 12).monospacedDigit()
         case .body: .system(size: 13).monospacedDigit()
         case .bodyStrong: .system(size: 13, weight: .semibold).monospacedDigit()
         case .button: .system(size: 15, weight: .semibold, design: .rounded).monospacedDigit()
@@ -64,9 +64,11 @@ enum Theme {
 
     // MARK: - Sizes
 
-    static let popoverWidth: CGFloat = 360
+    static let popoverWidth: CGFloat = 380
     static let popoverMaxHeight: CGFloat = 560
-    static let cardHeight: CGFloat = 56
+    static let cardHeight: CGFloat = 56      // minimum; a two-line why line makes a card taller
+    static let cardPad: CGFloat = 10
+    static let iconButton: CGFloat = 15
     static let cardRadius: CGFloat = 14
     static let cardGap: CGFloat = 6
     static let appIcon: CGFloat = 28
@@ -82,7 +84,7 @@ enum Theme {
     static let pebbleRadius: CGFloat = 7.5
     static let eye: CGFloat = 1.3
     static let eyeGap: CGFloat = 3.0
-    static let welcomeWidth: CGFloat = 380
+    static let welcomeWidth: CGFloat = 400
     static let fade: CGFloat = 28
 
     // MARK: - Motion (seconds)
