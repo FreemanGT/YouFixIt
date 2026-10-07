@@ -4,54 +4,64 @@ import SwiftUI
 
 /// The pebble's face. Everything is a number so poses can be blended frame by frame.
 struct Pose: Equatable, Sendable {
+    /// Grey like every other bar icon while calm; colour means there is something to look at.
+    enum Tint: Equatable, Sendable { case bar, ok, warn, paused }
+
     var eyeDX: CGFloat = 0        // eyes glance sideways (pt)
     var eyeDY: CGFloat = 0        // eyes look down (positive) or up
     var eyeScale: CGFloat = 1
     var eyeOpen: CGFloat = 1      // 1 open, 0 a closed line
     var smile: CGFloat = 0        // 0 round holes, 1 smile arcs
-    var dot: CGFloat = 0          // the notice dot
     var lift: CGFloat = 0         // whole pebble raised (pt)
     var squashX: CGFloat = 1
     var squashY: CGFloat = 1
     var alpha: CGFloat = 1
+    var tint: Tint = .bar
 
     static let calm = Pose()
-    static let light = Pose(dot: 1)
-    static let glance = Pose(eyeDX: 0.5, eyeDY: -0.4, dot: 1)
-    static let heavy = Pose(eyeScale: 1.2, dot: 1, lift: 1)
-    static let working = Pose(eyeDY: 0.6, squashX: 1.05, squashY: 0.95)
-    static let done = Pose(smile: 1)
-    static let hop = Pose(smile: 1, lift: 2)
-    static let paused = Pose(eyeOpen: 0, lift: -1, alpha: 0.55)
+    static let light = Pose(tint: .ok)
+    static let glance = Pose(eyeDX: 0.6, eyeDY: -0.4, tint: .ok)
+    static let heavy = Pose(eyeScale: 1.2, lift: 1, tint: .warn)
+    static let working = Pose(eyeDY: 0.7, squashX: 1.05, squashY: 0.95, tint: .ok)
+    static let done = Pose(smile: 1, tint: .ok)
+    static let hop = Pose(smile: 1, lift: 2, tint: .ok)
+    static let paused = Pose(eyeOpen: 0, lift: -1, alpha: 0.55, tint: .paused)
 
     static func mix(_ a: Pose, _ b: Pose, _ t: CGFloat) -> Pose {
         func l(_ x: CGFloat, _ y: CGFloat) -> CGFloat { x + (y - x) * t }
         return Pose(eyeDX: l(a.eyeDX, b.eyeDX), eyeDY: l(a.eyeDY, b.eyeDY), eyeScale: l(a.eyeScale, b.eyeScale),
-                    eyeOpen: l(a.eyeOpen, b.eyeOpen), smile: l(a.smile, b.smile), dot: l(a.dot, b.dot), lift: l(a.lift, b.lift),
-                    squashX: l(a.squashX, b.squashX), squashY: l(a.squashY, b.squashY), alpha: l(a.alpha, b.alpha))
+                    eyeOpen: l(a.eyeOpen, b.eyeOpen), smile: l(a.smile, b.smile), lift: l(a.lift, b.lift),
+                    squashX: l(a.squashX, b.squashX), squashY: l(a.squashY, b.squashY), alpha: l(a.alpha, b.alpha),
+                    tint: t < 0.5 ? a.tint : b.tint)
     }
 
-    /// A template image for the menu bar. Black is the pebble; the eyes are holes, so the bar shows through them.
+    /// The menu bar image. Grey poses are templates (the bar tints them); colour poses are drawn as they are.
+    /// The eyes are holes either way, so the bar shows through them.
     func image(scale: CGFloat = 1) -> NSImage {
         let canvas = Theme.barCanvas
+        let fill: NSColor = switch tint {
+        case .bar, .paused: .black
+        case .ok: Theme.barGreen
+        case .warn: Theme.barAmber
+        }
         let image = NSImage(size: NSSize(width: canvas * scale, height: canvas * scale), flipped: true) { _ in
             guard let cg = NSGraphicsContext.current?.cgContext else { return false }
             cg.scaleBy(x: scale, y: scale)
             let w = Theme.pebble.width * squashX
             let h = Theme.pebble.height * squashY
             let cx = canvas / 2
-            let cy = canvas / 2 + 0.5 - lift
+            let cy = canvas / 2 - lift
             let body = NSBezierPath(roundedRect: NSRect(x: cx - w / 2, y: cy - h / 2, width: w, height: h),
                                     xRadius: Theme.pebbleRadius * squashX, yRadius: Theme.pebbleRadius * squashY)
-            NSColor.black.withAlphaComponent(alpha).setFill()
+            fill.withAlphaComponent(alpha).setFill()
             body.fill()
 
             // Eyes are cut out of the pebble.
             cg.saveGState()
             cg.setBlendMode(.destinationOut)
             let r = Theme.eye * eyeScale
-            let ey = cy - 0.9 + eyeDY
-            for ex in [cx - 2.4 + eyeDX, cx + 2.4 + eyeDX] {
+            let ey = cy - 1.0 + eyeDY
+            for ex in [cx - Theme.eyeGap + eyeDX, cx + Theme.eyeGap + eyeDX] {
                 if smile < 1 {
                     let open = max(0.22, eyeOpen)
                     NSColor.black.withAlphaComponent(1 - smile).setFill()
@@ -59,22 +69,17 @@ struct Pose: Equatable, Sendable {
                 }
                 if smile > 0 {
                     let arc = NSBezierPath()
-                    arc.appendArc(withCenter: NSPoint(x: ex, y: ey + 0.3), radius: r + 0.25, startAngle: 200, endAngle: 340, clockwise: false)
-                    arc.lineWidth = 0.9
+                    arc.appendArc(withCenter: NSPoint(x: ex, y: ey + 0.4), radius: r + 0.4, startAngle: 200, endAngle: 340, clockwise: false)
+                    arc.lineWidth = 1.1
                     arc.lineCapStyle = .round
                     NSColor.black.withAlphaComponent(smile).setStroke()
                     arc.stroke()
                 }
             }
             cg.restoreGState()
-
-            if dot > 0.01 {
-                NSColor.black.withAlphaComponent(dot * alpha).setFill()
-                NSBezierPath(ovalIn: NSRect(x: canvas - 3.5 - Theme.dot, y: 5.5 - Theme.dot - lift, width: Theme.dot * 2, height: Theme.dot * 2)).fill()
-            }
             return true
         }
-        image.isTemplate = true
+        image.isTemplate = tint == .bar || tint == .paused
         return image
     }
 }
@@ -188,20 +193,33 @@ final class StatusIcon {
             guard !Task.isCancelled else { return }
             t += 0.125 / 1.2
             var p = Pose.working
-            p.eyeDX = 0.6 * CGFloat(sin(t * 2 * .pi))
+            p.eyeDX = 0.7 * CGFloat(sin(t * 2 * .pi))
             set(p)
         }
     }
 }
 
-/// The menu bar label. Re-rendered by SwiftUI only when the pose image changes.
+/// The menu bar label: the face, and next to it the number of things to tidy when there are any.
+/// Re-rendered by SwiftUI only when the pose image or the count changes.
 struct IconLabel: View {
     let icon: StatusIcon
     let engine: Engine
 
     var body: some View {
-        Image(nsImage: icon.image)
-            .accessibilityLabel(tip)
+        HStack(spacing: Theme.tight) {
+            Image(nsImage: icon.image)
+            if let n = count {
+                Text("\(n)").font(Theme.font(.badge))
+            }
+        }
+        .accessibilityLabel(tip)
+    }
+
+    private var count: Int? {
+        switch engine.mood {
+        case .light, .heavy: engine.actionable.isEmpty ? nil : engine.actionable.count
+        default: nil
+        }
     }
 
     private var tip: String {

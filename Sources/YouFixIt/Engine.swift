@@ -162,7 +162,8 @@ final class Engine {
         NSWorkspace.shared.runningApplications.map { app in
             let id = app.bundleIdentifier ?? ""
             return AppSeed(pid: app.processIdentifier, bundleID: id, name: app.localizedName ?? id, url: app.bundleURL,
-                           regular: app.activationPolicy == .regular, hidden: app.isHidden, active: app.isActive,
+                           regular: app.activationPolicy == .regular, accessory: app.activationPolicy == .accessory,
+                           hidden: app.isHidden, active: app.isActive,
                            launched: app.launchDate, lastActivated: lastActivated[id] ?? launchedAt)
         }
     }
@@ -247,7 +248,7 @@ final class Engine {
                 try? await Task.sleep(for: .milliseconds(700))
                 outcome = .done
             } else {
-                let (o, undo) = await Actions.perform(f, sample: history.last, keep: Set(keep.keys), tuning: tuning)
+                let (o, undo) = await Actions.perform(f, history: history, keep: Set(keep.keys), tuning: tuning)
                 outcome = o
                 if let undo { undoRecords.append(undo) }
             }

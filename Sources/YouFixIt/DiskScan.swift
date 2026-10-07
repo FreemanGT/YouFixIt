@@ -5,6 +5,9 @@ import Foundation
 /// Slow (du) and rare (every six hours, or when the popover opens and the last look is over an hour old). Off the main actor.
 enum DiskScanner {
     nonisolated static let home = NSHomeDirectory()
+    /// Folders under ~/.cache that are plain download caches, refilled by their tool on the next run.
+    /// Anything else there (browser installs, model files, a running tool's own data) is explained, never trashed.
+    nonisolated static let refillable: Set<String> = ["pip", "uv", "pypoetry", "pnpm", "yarn", "node-gyp", "typescript", "go-build", "prisma", "pre-commit"]
 
     struct Candidate: Sendable {
         let kind: DiskScan.Kind
@@ -18,19 +21,27 @@ enum DiskScanner {
         var out: [Candidate] = [
             Candidate(kind: .derivedData, path: "\(home)/Library/Developer/Xcode/DerivedData", name: "Xcode build cache"),
             Candidate(kind: .deviceSupport, path: "\(home)/Library/Developer/Xcode/iOS DeviceSupport", name: "iPhone support files"),
+            Candidate(kind: .previews, path: "\(home)/Library/Developer/Xcode/UserData/Previews", name: "Xcode preview cache"),
+            Candidate(kind: .simCache, path: "\(home)/Library/Developer/CoreSimulator/Caches", name: "Simulator cache"),
             Candidate(kind: .devCache, path: "\(home)/.npm/_cacache", name: "npm download cache"),
             Candidate(kind: .devCache, path: "\(home)/Library/Caches/pnpm", name: "pnpm cache"),
             Candidate(kind: .devCache, path: "\(home)/Library/Caches/Yarn", name: "Yarn cache"),
             Candidate(kind: .devCache, path: "\(home)/Library/Caches/pip", name: "pip cache"),
             Candidate(kind: .devCache, path: "\(home)/Library/Caches/Homebrew", name: "Homebrew downloads"),
-            Candidate(kind: .devCache, path: "\(home)/Library/Caches/ms-playwright", name: "Playwright browsers"),
+            Candidate(kind: .devCache, path: "\(home)/Library/Caches/CocoaPods", name: "CocoaPods cache"),
+            Candidate(kind: .devCache, path: "\(home)/.gradle/caches", name: "Gradle cache"),
+            Candidate(kind: .devCache, path: "\(home)/.m2/repository", name: "Maven cache"),
+            Candidate(kind: .devCache, path: "\(home)/go/pkg/mod", name: "Go module cache"),
+            Candidate(kind: .devCache, path: "\(home)/.cargo/registry", name: "Cargo cache"),
+            Candidate(kind: .devCache, path: "\(home)/.bun/install/cache", name: "Bun cache"),
+            Candidate(kind: .otherCache, path: "\(home)/Library/Caches/ms-playwright", name: "Playwright browsers"),
             Candidate(kind: .trash, path: "\(home)/.Trash", name: "Trash"),
         ]
         let fm = FileManager.default
-        // Each tool keeps its own folder under ~/.cache; they are all refillable.
+        // Each tool keeps its own folder under ~/.cache. Only the known download caches may be trashed.
         if let names = try? fm.contentsOfDirectory(atPath: "\(home)/.cache") {
             for name in names where !name.hasPrefix(".") {
-                out.append(Candidate(kind: .devCache, path: "\(home)/.cache/\(name)", name: "\(name) cache"))
+                out.append(Candidate(kind: refillable.contains(name) ? .devCache : .otherCache, path: "\(home)/.cache/\(name)", name: "\(name) cache"))
             }
         }
         // Caches whose app is gone. Bundle-id-shaped folders only, never Apple's own, never a helper of an installed app
@@ -69,6 +80,16 @@ enum DiskScanner {
         }
     }
 
+    /// True when anything inside was written within the window (minutes for caches, days for orphan caches).
+    /// A folder a tool is filling right now must not move. When the check itself fails, assume busy.
+    nonisolated static func recentlyWritten(_ path: String, minutes: Int? = nil, days: Int? = nil) async -> Bool {
+        var args = [path]
+        if let minutes { args += ["-mmin", "-\(minutes)"] } else if let days { args += ["-mtime", "-\(days)"] }
+        args += ["-print", "-quit"]
+        guard let r = await Shell.run("/usr/bin/find", args, timeout: 60) else { return true }
+        return !r.out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     static func scan() async -> DiskScan {
         let list = candidates()
         var items: [DiskScan.Item] = []
@@ -80,7 +101,14 @@ enum DiskScanner {
                 group.addTask {
                     guard let r = await Shell.run("/usr/bin/du", ["-sk", c.path], timeout: 60), r.status == 0,
                           let kb = UInt64(r.out.split(separator: "\t").first?.trimmingCharacters(in: .whitespaces) ?? "") else { return nil }
-                    return DiskScan.Item(kind: c.kind, path: c.path, name: c.name, bytes: kb << 10, modified: c.modified)
+                    var item = DiskScan.Item(kind: c.kind, path: c.path, name: c.name, bytes: kb << 10, modified: c.modified)
+                    guard item.bytes >= Tuning.standard.diskMin else { return item }
+                    switch c.kind {
+                    case .derivedData, .deviceSupport, .previews, .simCache, .devCache: item.busy = await recentlyWritten(c.path, minutes: 10)
+                    case .orphanCache: item.busy = await recentlyWritten(c.path, days: 30)
+                    default: break
+                    }
+                    return item
                 }
             }
             while running < 4, let c = pending.popFirst() { launch(c); running += 1 }

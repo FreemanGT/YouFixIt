@@ -21,6 +21,8 @@ enum Copy {
     static func headerPaused(until: Date) -> String { "Taking a break until \(Format.clock(until))." }
     static let headerEmpty = "Nothing to tidy."
     static let subEmpty = "Your Mac is doing great."
+    static let subLight = "Nothing changes until you press the button."
+    static let subHeavy = "Letting these go helps right away."
 
     // Sections.
     static let sectionRunning = "Running now"
@@ -41,6 +43,7 @@ enum Copy {
     static let whyOrphanCache = "Left behind by a removed app"
     static func whyInstaller(_ bytes: UInt64) -> String { "An installer you already used" }
     static let whyUnavailableSims = "Their iOS version is gone"
+    static let whyIdleVM = "No containers running, nothing using it"
     static func estimate(_ bytes: UInt64) -> String { "about \(Format.size(bytes))" }
     static let keep = "Keep"
     static func keepTip(_ name: String) -> String { "Never suggest \(name)" }
@@ -74,6 +77,7 @@ enum Copy {
     static let refusedDialog = "It has a dialog open, so it stays."
     static let refusedAudio = "It's playing audio, so it stays."
     static let refusedKept = "On your Always keep list."
+    static let refusedBusy = "It's busy with something, so it stays."
     static let restartServer = "Start it again from the project folder when you need it"
 
     // Good to know.
@@ -101,6 +105,17 @@ enum Copy {
     static let trashLink = "Open Trash"
     static func oldRuntime(_ name: String, _ bytes: UInt64) -> String { "The \(name) simulator hasn't been used in months (\(Format.size(bytes))). Remove it in Xcode's Components settings." }
     static func oldDevice(_ name: String, _ bytes: UInt64) -> String { "The test iPhone \(name) hasn't been used in months (\(Format.size(bytes))). Remove it in Xcode's Devices window." }
+    static func vmApp(_ name: String, _ bytes: UInt64) -> String { "\(name) is holding \(Format.size(bytes)) for a virtual machine. Shut the machine down inside \(name) when you're done." }
+    static func brewServices(_ names: [String], _ bytes: UInt64) -> String {
+        "\(names.joined(separator: ", ")) are running from Homebrew (\(Format.size(bytes))). They start at login; brew services stop NAME turns one off."
+    }
+    static func menuBarApps(_ top: [String], _ bytes: UInt64) -> String {
+        "Menu bar apps are holding \(Format.size(bytes)): \(top.joined(separator: ", ")). Quit the ones you don't use from their own menu bar icons."
+    }
+    static func busyProgram(_ name: String) -> String { "\(name) has been working hard for a few minutes. If you're not waiting on it, quitting it gives the Mac a breather." }
+    static func leftoverWatcher(_ bytes: UInt64) -> String { "Left over from a coding session, holding \(Format.size(bytes)). It isn't serving anything; quit it from Terminal if it isn't yours." }
+    static let connectedServer = "Still running from a coding session, and something is connected to it right now."
+    static func otherCache(_ bytes: UInt64) -> String { "Holds \(Format.size(bytes)) of downloaded tool data. Some tools need reinstalling after it's removed, so it's left to you." }
     static func lowDisk(_ free: UInt64) -> String { "Only \(Format.size(free)) of space is left. The things above are the quickest way to make room." }
 
     // Footer and settings.

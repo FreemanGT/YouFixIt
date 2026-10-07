@@ -11,6 +11,7 @@ struct Sample: Sendable {
         let start: Date
         let cpu: Double         // fraction of one core since the previous sample (0.25 = 25%); 0 on the first sample
         let footprint: UInt64   // ri_phys_footprint for our own processes, resident size for others
+        let diskIO: UInt64      // bytes read plus written so far (rusage); 0 for other users' processes
     }
 
     struct App: Sendable {
@@ -19,6 +20,7 @@ struct Sample: Sendable {
         let name: String
         let url: URL?
         let regular: Bool       // NSApplication.ActivationPolicy.regular (shows in the Dock)
+        let accessory: Bool     // .accessory: a menu bar app
         let hidden: Bool
         let active: Bool
         let launched: Date?
@@ -44,6 +46,8 @@ struct Sample: Sendable {
     let managedPids: Set<pid_t>     // launchd-managed jobs (only gathered when orphan candidates exist)
     let args: [pid_t: [String]]     // only for candidate pids (our user, parent pid 1)
     let listening: Set<pid_t>       // candidate pids with a listening TCP socket
+    let established: [pid_t: Int]   // candidate pids with open TCP connections, and how many
+    let containersIdle: [String: Bool]  // VM app bundle id: true when its Docker socket reports no containers
     let frontmost: pid_t
     let fullscreen: Bool            // the frontmost app covers the main display
     let cpuBusy: Double             // 0...1, system wide
@@ -71,10 +75,18 @@ struct Sample: Sendable {
 
     func footprint(of pid: pid_t) -> UInt64 { tree(pid).reduce(0) { $0 + $1.footprint } }
     func cpu(of pid: pid_t) -> Double { tree(pid).reduce(0) { $0 + $1.cpu } }
+    func io(of pid: pid_t) -> UInt64 { tree(pid).reduce(0) { $0 + $1.diskIO } }
     func app(_ pid: pid_t) -> App? { apps.first { $0.pid == pid } }
     func app(bundle id: String) -> App? { apps.first { $0.bundleID == id } }
     func procs(named name: String) -> [Proc] { procs.values.filter { $0.name == name } }
     var uptime: TimeInterval { at.timeIntervalSince(booted) }
+
+    /// The topmost ancestor below launchd that we own; nil when the chain leaves our user.
+    func root(of pid: pid_t) -> Proc? {
+        guard var p = procs[pid], p.uid == Sampler.me else { return nil }
+        while p.ppid != 1, let parent = procs[p.ppid], parent.uid == Sampler.me { p = parent }
+        return p
+    }
 }
 
 /// What the AppKit side knows about a running app; built on the main actor and handed to the sampler.
@@ -84,6 +96,7 @@ struct AppSeed: Sendable {
     let name: String
     let url: URL?
     let regular: Bool
+    let accessory: Bool
     let hidden: Bool
     let active: Bool
     let launched: Date?
@@ -96,7 +109,8 @@ struct Tuning: Sendable {
     var appIdle: TimeInterval = 3600      // apps: not activated for this long
     var sustain: TimeInterval = 120       // spike conditions must hold this long
     var diskMin: UInt64 = 500 << 20       // disk rows under this are not worth a row
-    var appMin: UInt64 = 400 << 20        // idle apps under this footprint are left alone
+    var appMin: UInt64 = 250 << 20        // idle apps under this footprint are left alone
+    var busyIO: Double = 1_048_576        // bytes per second of disk traffic that means "working"
     static let standard = Tuning()
 }
 
@@ -112,7 +126,7 @@ struct Finding: Identifiable, Sendable, Equatable {
         case deleteUnavailableSims
     }
 
-    let id: String                  // stable across scans: "sim:UDID", "app:bundle", "orphan:pid:start", "path:/…", "know:kind"
+    let id: String                  // stable across scans: "sim:UDID", "app:bundle", "vm:bundle", "orphan:pid:start", "path:/…", "know:kind"
     let keepKey: String             // what "Keep" remembers: a bundle id, an executable path, a folder, a device UDID
     let group: Group
     let name: String                // "Saves Store 6.9", "FreeFlow", "Xcode build cache"
@@ -145,13 +159,14 @@ enum Outcome: Sendable, Equatable {
 
 /// What the disk side knows. Measured slowly and rarely; nil until the first measurement lands.
 struct DiskScan: Sendable {
-    enum Kind: Sendable { case derivedData, deviceSupport, devCache, orphanCache, installer, trash, runtime, oldDevice }
+    enum Kind: Sendable { case derivedData, deviceSupport, previews, simCache, devCache, otherCache, orphanCache, installer, trash, runtime, oldDevice }
     struct Item: Sendable {
         let kind: Kind
         let path: String
         let name: String
         let bytes: UInt64
         let modified: Date?
+        var busy = false    // something wrote inside it recently (10 min for caches, 30 days for orphan caches)
     }
     let at: Date
     let items: [Item]

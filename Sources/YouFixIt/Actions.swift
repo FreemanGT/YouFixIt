@@ -12,10 +12,10 @@ enum UndoRecord: Sendable {
 /// The only code that changes anything on the Mac. Every path re-checks safety first and never escalates.
 enum Actions {
     @MainActor
-    static func perform(_ f: Finding, sample: Sample?, keep: Set<String>, tuning: Tuning) async -> (Outcome, UndoRecord?) {
+    static func perform(_ f: Finding, history: [Sample], keep: Set<String>, tuning: Tuning) async -> (Outcome, UndoRecord?) {
         switch f.action {
         case .quitApp(let pid, let bundleID, let url):
-            return await quit(pid: pid, bundleID: bundleID, url: url, name: f.name, sample: sample, keep: keep, tuning: tuning)
+            return await quit(pid: pid, bundleID: bundleID, url: url, name: f.name, history: history, keep: keep, tuning: tuning)
         case .shutdownSim(let udid):
             let gui = NSWorkspace.shared.runningApplications.contains { Rules.simGUIBundles.contains($0.bundleIdentifier ?? "") && !$0.isHidden }
             guard let r = await Shell.run("/usr/bin/xcrun", ["simctl", "shutdown", udid], timeout: 20), r.status == 0 else {
@@ -25,6 +25,8 @@ enum Actions {
         case .sigterm(let pid, let start):
             return await terminate(pid: pid, start: start, name: f.name)
         case .trash(let path):
+            // A tool may have started filling it since the scan.
+            if await DiskScanner.recentlyWritten(path, minutes: 10) { return (.refused(Copy.refusedBusy), nil) }
             let url = URL(fileURLWithPath: path)
             var trashed: NSURL?
             do {
@@ -66,11 +68,12 @@ enum Actions {
 
     /// The normal Quit request, so the app can save or refuse. Never force-quit.
     @MainActor
-    private static func quit(pid: pid_t, bundleID: String, url: URL?, name: String, sample: Sample?, keep: Set<String>, tuning: Tuning) async -> (Outcome, UndoRecord?) {
+    private static func quit(pid: pid_t, bundleID: String, url: URL?, name: String, history: [Sample], keep: Set<String>, tuning: Tuning) async -> (Outcome, UndoRecord?) {
         guard let app = NSRunningApplication(processIdentifier: pid), app.bundleIdentifier == bundleID, !app.isTerminated else {
             return (.done, url.map { .reopen($0) })   // already gone
         }
-        if let sample, let p = sample.procs[pid], let why = Safety.refusal(p, app: sample.app(pid), in: sample, keep: keep, tuning: tuning) {
+        if let sample = history.last, let p = sample.procs[pid],
+           let why = Safety.refusal(p, app: sample.app(pid), in: sample, history: history, keep: keep, tuning: tuning) {
             return (.refused(why), nil)
         }
         if app.isActive || NSWorkspace.shared.frontmostApplication?.processIdentifier == pid { return (.refused(Copy.refusedInUse), nil) }

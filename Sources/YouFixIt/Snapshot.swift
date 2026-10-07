@@ -20,6 +20,8 @@ enum Snapshot {
         Scene(name: "light-1", mock: "simIdle"),
         Scene(name: "heavy", mock: "heavy"),
         Scene(name: "good-to-know-open", mock: "heavy", knowOpen: true),
+        Scene(name: "know-open", mock: "chrome40", knowOpen: true),
+        Scene(name: "busy", mock: "busyProgram", knowOpen: true),
         Scene(name: "kept-undo-line", mock: "heavy", kept: true),
         Scene(name: "working-mid", mock: "heavy", working: true),
         Scene(name: "done", mock: "heavy", done: true),
@@ -77,12 +79,22 @@ enum Snapshot {
                 HStack(spacing: 12) {
                     ForEach(poses, id: \.0) { name, pose in
                         VStack(spacing: 2) {
-                            Image(nsImage: pose.image()).renderingMode(.template)
+                            Image(nsImage: pose.image())
                                 .resizable().interpolation(.none)
                                 .frame(width: Theme.barCanvas * scale, height: Theme.barCanvas * scale)
                                 .foregroundStyle(dark ? Color.white : Color.black)
                             Text(name).font(.system(size: 9)).foregroundStyle(.secondary)
                         }
+                    }
+                    // The bar item as it looks with things to tidy: the colour face plus the count.
+                    VStack(spacing: 2) {
+                        HStack(spacing: Theme.tight * scale) {
+                            Image(nsImage: Pose.light.image())
+                                .resizable().interpolation(.none)
+                                .frame(width: Theme.barCanvas * scale, height: Theme.barCanvas * scale)
+                            Text("3").font(.system(size: 12 * scale, weight: .semibold, design: .rounded)).foregroundStyle(dark ? Color.white : Color.black)
+                        }
+                        Text("count").font(.system(size: 9)).foregroundStyle(.secondary)
                     }
                 }
             }

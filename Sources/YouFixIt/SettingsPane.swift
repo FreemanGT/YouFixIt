@@ -29,29 +29,30 @@ struct SettingsPane: View {
                 Color.clear.frame(width: 40, height: 1)
             }
 
-            Toggle(Copy.openAtLogin, isOn: Binding(get: { loginItem }, set: { setLoginItem($0) }))
-            HStack {
-                Toggle(Copy.softSounds, isOn: $softSounds)
-                Spacer()
-                Button(Copy.playSample) { Sound.play(.done, force: true) }.controlSize(.small)
+            VStack(alignment: .leading, spacing: Theme.gap) {
+                Toggle(Copy.openAtLogin, isOn: Binding(get: { loginItem }, set: { setLoginItem($0) }))
+                HStack {
+                    Toggle(Copy.softSounds, isOn: $softSounds)
+                    Spacer()
+                    Button(Copy.playSample) { Sound.play(.done, force: true) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+                }
+                VStack(alignment: .leading, spacing: Theme.hair) {
+                    Toggle(Copy.notifications, isOn: Binding(get: { notifications }, set: { on in
+                        notifications = on
+                        if on { Notifier.shared.requestAuthorization() }
+                    }))
+                    Text(Copy.notificationsCaption).font(Theme.font(.caption)).foregroundStyle(.secondary).padding(.leading, 20)
+                }
+                Picker(Copy.nudgeMe, selection: $nudgeMode) {
+                    Text(Copy.nudgeStruggling).tag(Nudge.Mode.struggling.rawValue)
+                    Text(Copy.nudgeDaily).tag(Nudge.Mode.daily.rawValue)
+                    Text(Copy.nudgeNever).tag(Nudge.Mode.never.rawValue)
+                }
             }
-            VStack(alignment: .leading, spacing: Theme.hair) {
-                Toggle(Copy.notifications, isOn: Binding(get: { notifications }, set: { on in
-                    notifications = on
-                    if on { Notifier.shared.requestAuthorization() }
-                }))
-                Text(Copy.notificationsCaption).font(Theme.font(.caption)).foregroundStyle(.secondary).padding(.leading, 20)
-            }
-            Picker(Copy.nudgeMe, selection: $nudgeMode) {
-                Text(Copy.nudgeStruggling).tag(Nudge.Mode.struggling.rawValue)
-                Text(Copy.nudgeDaily).tag(Nudge.Mode.daily.rawValue)
-                Text(Copy.nudgeNever).tag(Nudge.Mode.never.rawValue)
-            }
-
-            Divider()
+            .card()
 
             VStack(alignment: .leading, spacing: Theme.tight) {
-                Text(Copy.alwaysKeep).font(Theme.font(.body))
+                Text(Copy.alwaysKeep).font(Theme.font(.bodyStrong))
                 Text(Copy.alwaysKeepCaption).font(Theme.font(.caption)).foregroundStyle(.secondary)
                 if engine.keep.isEmpty {
                     Text(Copy.alwaysKeepEmpty).font(Theme.font(.caption)).foregroundStyle(.tertiary).padding(.top, Theme.hair)
@@ -62,16 +63,17 @@ struct SettingsPane: View {
                             Spacer()
                             Button(Copy.remove) { engine.unkeep(key) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
                         }
+                        .padding(.top, Theme.tight)
                     }
                 }
             }
+            .card()
 
-            Divider()
-
-            HStack {
-                Button(Copy.pauseHour) { engine.pause(for: 3600); back() }.controlSize(.small)
-                Spacer()
-                Button(Copy.quit) { NSApp.terminate(nil) }.controlSize(.small)
+            HStack(spacing: Theme.row) {
+                Button { engine.pause(for: 3600); back() } label: { PillLabel(title: Copy.pauseHour, filled: false, showKey: false) }
+                    .buttonStyle(PillStyle(filled: false, height: Theme.pillCompact))
+                Button { NSApp.terminate(nil) } label: { PillLabel(title: Copy.quit, filled: false, showKey: false) }
+                    .buttonStyle(PillStyle(filled: false, height: Theme.pillCompact))
             }
         }
         .toggleStyle(.switch)

@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// The menu bar window: a mood sentence, the suggestions, one button, what's good to know, a footer.
+/// The menu bar window: the face and a mood sentence, the suggestions as cards, one pill, what's good to know, a footer.
 struct PopoverView: View {
     enum Pane { case main, settings }
 
@@ -43,10 +43,10 @@ struct MainPane: View {
                 .padding(.top, Theme.edge)
                 .padding(.bottom, Theme.gap)
             if hasList {
-                MeasuredScroll(maxHeight: Theme.popoverMaxHeight - 200, estimate: estimatedListHeight) {
+                MeasuredScroll(maxHeight: Theme.popoverMaxHeight - 220, estimate: estimatedListHeight) {
                     VStack(alignment: .leading, spacing: Theme.section) {
                         if engine.mood == .done, !doneRows.isEmpty {
-                            section(Copy.sectionRunning) {
+                            section(Copy.sectionRunning, count: doneRows.count) {
                                 ForEach(doneRows) { row in
                                     FindingRow(finding: row.finding, engine: engine)
                                 }
@@ -57,7 +57,7 @@ struct MainPane: View {
                         }
                         if !engine.know.isEmpty { knowSection }
                     }
-                    .padding(.horizontal, Theme.row)
+                    .padding(.horizontal, Theme.edge)
                     .padding(.bottom, Theme.tight)
                 }
             }
@@ -91,18 +91,19 @@ struct MainPane: View {
         }
     }
 
-    /// Rows are fixed height, so the list's size is known before layout. Only an open Good to know varies.
+    /// Cards are fixed height, so the list's size is known before layout. Only an open Good to know varies.
     private var estimatedListHeight: CGFloat {
-        let sectionHead: CGFloat = 16 + Theme.tight
+        let sectionHead: CGFloat = 16 + Theme.row
+        func cards(_ n: Int) -> CGFloat { CGFloat(n) * Theme.cardHeight + CGFloat(max(0, n - 1)) * Theme.cardGap }
         var h: CGFloat = Theme.tight
         var sections = 0
         if engine.mood == .done, !doneRows.isEmpty {
-            h += sectionHead + CGFloat(doneRows.count) * Theme.rowHeight; sections += 1
+            h += sectionHead + cards(doneRows.count); sections += 1
         } else {
-            if !engine.running.isEmpty { h += sectionHead + CGFloat(engine.running.count) * Theme.rowHeight; sections += 1 }
-            if !engine.space.isEmpty { h += sectionHead + CGFloat(engine.space.count) * Theme.rowHeight; sections += 1 }
+            if !engine.running.isEmpty { h += sectionHead + cards(engine.running.count); sections += 1 }
+            if !engine.space.isEmpty { h += sectionHead + cards(engine.space.count); sections += 1 }
         }
-        if !engine.know.isEmpty { h += 20 + (knowOpen ? CGFloat(engine.know.count) * 56 : 0); sections += 1 }
+        if !engine.know.isEmpty { h += 44 + (knowOpen ? CGFloat(engine.know.count) * 64 : 0); sections += 1 }
         h += CGFloat(max(0, sections - 1)) * Theme.section
         return h
     }
@@ -114,48 +115,64 @@ struct MainPane: View {
     // MARK: - Header
 
     @ViewBuilder private var header: some View {
-        VStack(alignment: .leading, spacing: Theme.tight) {
-            switch engine.mood {
-            case .scanning:
-                Text(Copy.headerScanning).font(Theme.font(.title))
-            case .calm:
-                Text(engine.know.isEmpty ? Copy.headerEmpty : Copy.headerCalm).font(Theme.font(.title))
-                if engine.know.isEmpty { Text(Copy.subEmpty).font(Theme.font(.body)).foregroundStyle(.secondary) }
-            case .light:
-                Text(Copy.headerLight).font(Theme.font(.title))
-            case .heavy:
-                Text(Copy.headerHeavy).font(Theme.font(.title))
-            case .working:
-                Text(Copy.headerWorking).font(Theme.font(.title))
-            case .done:
-                let freed = engine.result?.freed ?? 0
-                Text(Copy.headerDone(UInt64(shownTotal)))
-                    .font(Theme.font(.hero))
-                    .contentTransition(.numericText(value: shownTotal))
-                Text(freed > 0 ? Copy.subDone : Copy.subDoneNothing).font(Theme.font(.body)).foregroundStyle(.secondary)
-            case .paused:
-                Text(Copy.headerPaused(until: engine.pausedUntil ?? Date())).font(Theme.font(.title))
+        HStack(alignment: .top, spacing: Theme.gap) {
+            Pebble(mood: engine.mood)
+                .frame(width: Theme.faceSize.width, height: Theme.faceSize.height)
+                .padding(.top, Theme.hair)
+            VStack(alignment: .leading, spacing: Theme.tight) {
+                switch engine.mood {
+                case .scanning:
+                    Text(Copy.headerScanning).font(Theme.font(.title))
+                case .calm:
+                    Text(engine.know.isEmpty ? Copy.headerEmpty : Copy.headerCalm).font(Theme.font(.title))
+                    if engine.know.isEmpty { Text(Copy.subEmpty).font(Theme.font(.body)).foregroundStyle(.secondary) }
+                case .light:
+                    Text(Copy.headerLight).font(Theme.font(.title))
+                    Text(Copy.subLight).font(Theme.font(.body)).foregroundStyle(.secondary)
+                case .heavy:
+                    Text(Copy.headerHeavy).font(Theme.font(.title))
+                    Text(Copy.subHeavy).font(Theme.font(.body)).foregroundStyle(.secondary)
+                case .working:
+                    Text(Copy.headerWorking).font(Theme.font(.title))
+                case .done:
+                    let freed = engine.result?.freed ?? 0
+                    Text(Copy.headerDone(UInt64(shownTotal)))
+                        .font(Theme.font(.hero))
+                        .contentTransition(.numericText(value: shownTotal))
+                    Text(freed > 0 ? Copy.subDone : Copy.subDoneNothing).font(Theme.font(.body)).foregroundStyle(.secondary)
+                case .paused:
+                    Text(Copy.headerPaused(until: engine.pausedUntil ?? Date())).font(Theme.font(.title))
+                }
             }
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .fixedSize(horizontal: false, vertical: true)
         .transition(.opacity)
         .id(engine.mood)
     }
 
     // MARK: - Sections
 
-    private func section<Content: View>(_ title: String, @ViewBuilder content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: Theme.tight) {
-            Text(title)
-                .font(Theme.font(.caption))
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, Theme.row)
-            content()
+    private func section<Content: View>(_ title: String, count: Int, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: Theme.row) {
+            HStack(spacing: Theme.row) {
+                Text(title).font(Theme.font(.caption)).foregroundStyle(.secondary)
+                countPill(count)
+            }
+            .padding(.horizontal, Theme.tight)
+            VStack(spacing: Theme.cardGap) { content() }
         }
     }
 
+    private func countPill(_ n: Int) -> some View {
+        Text("\(n)")
+            .font(Theme.font(.badge)).foregroundStyle(.secondary)
+            .padding(.horizontal, Theme.row - Theme.hair).padding(.vertical, 1)
+            .background(Capsule().fill(Theme.pill))
+    }
+
     private func group(_ title: String, _ findings: [Finding], offset: Int) -> some View {
-        section(title) {
+        section(title, count: findings.count) {
             ForEach(Array(findings.enumerated()), id: \.element.id) { index, finding in
                 FindingRow(finding: finding, engine: engine)
                     .opacity(appeared || Render.offscreen ? 1 : 0)
@@ -182,13 +199,20 @@ struct MainPane: View {
     private var knowSection: some View {
         DisclosureGroup(isExpanded: $knowOpen) {
             VStack(alignment: .leading, spacing: Theme.row) {
-                ForEach(engine.know) { KnowRow(finding: $0) }
+                ForEach(Array(engine.know.enumerated()), id: \.element.id) { index, finding in
+                    if index > 0 { Divider() }
+                    KnowRow(finding: finding)
+                }
             }
-            .padding(.top, Theme.tight)
+            .padding(.top, Theme.row)
         } label: {
-            Text(Copy.sectionKnow).font(Theme.font(.caption)).foregroundStyle(.secondary)
+            HStack(spacing: Theme.row) {
+                Text(Copy.sectionKnow).font(Theme.font(.bodyStrong))
+                countPill(engine.know.count)
+            }
         }
-        .padding(.horizontal, Theme.row)
+        .padding(.leading, Theme.tight)
+        .card()
     }
 
     // MARK: - The button
@@ -196,22 +220,16 @@ struct MainPane: View {
     @ViewBuilder private var primary: some View {
         VStack(spacing: Theme.tight) {
             if engine.mood == .done, engine.canUndo {
-                Button { Task { await engine.undo() } } label: {
-                    Text(Copy.undo).frame(maxWidth: .infinity).frame(height: Theme.buttonHeight - 12)
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
-                .keyboardShortcut(.defaultAction)
+                Button { Task { await engine.undo() } } label: { PillLabel(title: Copy.undo, filled: false) }
+                    .buttonStyle(PillStyle(filled: false))
+                    .keyboardShortcut(.defaultAction)
                 Text(Copy.undoCaption).font(Theme.font(.caption)).foregroundStyle(.secondary)
             } else if engine.mood != .done {
                 let none = engine.selectedFindings.isEmpty
                 Button { Task { await engine.clean() } } label: {
-                    Text(engine.isWorking ? Copy.headerWorking : (none ? Copy.nothingSelected : Copy.tidyUp))
-                        .frame(maxWidth: .infinity).frame(height: Theme.buttonHeight - 12)
+                    PillLabel(title: engine.isWorking ? Copy.headerWorking : (none ? Copy.nothingSelected : Copy.tidyUp), showKey: !none && !engine.isWorking)
                 }
-                .buttonStyle(.borderedProminent)
-                .tint(Theme.tint)
-                .controlSize(.large)
+                .buttonStyle(PillStyle())
                 .keyboardShortcut(.defaultAction)
                 .disabled(none || engine.isWorking)
                 .accessibilityLabel(Copy.a11yTidy(engine.selectedFindings.count, engine.selectedMemory + engine.selectedSpace))
@@ -258,11 +276,21 @@ struct MeasuredScroll<Content: View>: View {
         _height = State(initialValue: estimate)
     }
 
+    private var overflows: Bool { height > maxHeight + 1 }
+
     var body: some View {
         ScrollView(.vertical) {
             content()
                 .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { height = $0 }
         }
         .frame(height: min(height, maxHeight))
+        // A soft fade at the bottom says "there is more" without a scroll bar.
+        .mask(
+            VStack(spacing: 0) {
+                Color.black
+                LinearGradient(colors: [.black, overflows ? .clear : .black], startPoint: .top, endPoint: .bottom)
+                    .frame(height: Theme.fade)
+            }
+        )
     }
 }

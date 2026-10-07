@@ -10,18 +10,24 @@ actor Sampler {
     private var prevCPU: host_cpu_load_info_data_t?
     private var pathCache: [pid_t: (start: TimeInterval, path: String)] = [:]
     private var simCache: (at: Date, sims: [Sample.Sim])?
+    private var vmCache: [String: (at: Date, idle: Bool)] = [:]
 
     static let me = getuid()
     /// Names whose orphans may be dev servers (R3) or other leftovers (G12).
     static let serverNames: Set<String> = ["node", "bun", "deno", "python", "python3", "ruby", "java", "php"]
     static let browserNames: Set<String> = ["Google Chrome", "Google Chrome Beta", "Google Chrome Canary", "Chromium", "Brave Browser", "Microsoft Edge", "chrome-headless-shell"]
+    /// Virtual machine apps and the Docker socket that says whether anything runs inside.
+    static let vmSockets: [String: String] = [
+        "com.docker.docker": NSHomeDirectory() + "/.docker/run/docker.sock",
+        "dev.kdrag0n.MacVirt": NSHomeDirectory() + "/.orbstack/run/docker.sock",
+    ]
 
     func take(apps seeds: [AppSeed], frontmost: pid_t) async -> Sample {
         let now = Date()
         let mach = mach_absolute_time()
         let deltaMach = prevMach == 0 ? 0 : Double(mach &- prevMach)
 
-        // 1. Every process: parent, owner, start time, CPU ticks, memory.
+        // 1. Every process: parent, owner, start time, CPU ticks, memory, disk traffic.
         var procs: [pid_t: Sample.Proc] = [:]
         var children: [pid_t: [pid_t]] = [:]
         var ticksNow: [pid_t: (start: TimeInterval, ticks: UInt64)] = [:]
@@ -40,10 +46,14 @@ actor Sampler {
             }
             if haveTask { ticksNow[pid] = (start, ticks) }
             var footprint = task.pti_resident_size
-            if bsd.pbi_uid == Self.me, let fp = Self.footprint(pid) { footprint = fp }
+            var io: UInt64 = 0
+            if bsd.pbi_uid == Self.me, let usage = Self.rusage(pid) {
+                footprint = usage.footprint
+                io = usage.io
+            }
             let ppid = pid_t(bsd.pbi_ppid)
             procs[pid] = Sample.Proc(pid: pid, ppid: ppid, uid: bsd.pbi_uid, name: name, path: path,
-                                     start: Date(timeIntervalSince1970: start), cpu: cpu, footprint: footprint)
+                                     start: Date(timeIntervalSince1970: start), cpu: cpu, footprint: footprint, diskIO: io)
             children[ppid, default: []].append(pid)
         }
         prevTicks = ticksNow
@@ -54,7 +64,7 @@ actor Sampler {
         let win = Self.windows()
         let audio = Self.audioPids()
         let apps = seeds.map { s in
-            Sample.App(pid: s.pid, bundleID: s.bundleID, name: s.name, url: s.url, regular: s.regular, hidden: s.hidden,
+            Sample.App(pid: s.pid, bundleID: s.bundleID, name: s.name, url: s.url, regular: s.regular, accessory: s.accessory, hidden: s.hidden,
                        active: s.active, launched: s.launched, lastActivated: s.lastActivated,
                        windows: win.normal[s.pid] ?? 0, hasModal: win.modal.contains(s.pid), audio: audio.contains(s.pid))
         }
@@ -63,6 +73,7 @@ actor Sampler {
         // 3. Arguments and sockets, only for our own parent-pid-1 processes (orphans, launchd_sim, headless browsers).
         var args: [pid_t: [String]] = [:]
         var listening = Set<pid_t>()
+        var established: [pid_t: Int] = [:]
         var orphanCandidates = false
         for p in procs.values where p.uid == Self.me {
             let browser = Self.browserNames.contains(p.name)
@@ -73,7 +84,11 @@ actor Sampler {
                 // The listener is often a child (npm exec → node), so look through the whole tree.
                 var queue = [p.pid]
                 while let pid = queue.popLast() {
-                    if let q = procs[pid], Self.serverNames.contains(q.name), Self.listens(pid) { listening.insert(pid) }
+                    if let q = procs[pid], Self.serverNames.contains(q.name) {
+                        let sock = Self.sockets(pid)
+                        if sock.listening { listening.insert(pid) }
+                        if sock.established > 0 { established[pid] = sock.established }
+                    }
                     queue.append(contentsOf: children[pid] ?? [])
                 }
             }
@@ -96,7 +111,20 @@ actor Sampler {
         var managed = Set<pid_t>()
         if orphanCandidates { managed = await Self.managedPids() }
 
-        // 5. The machine.
+        // 5. Virtual machine apps: ask their Docker socket whether anything runs inside, once a minute.
+        var containersIdle: [String: Bool] = [:]
+        for seed in seeds {
+            guard let sock = Self.vmSockets[seed.bundleID] else { continue }
+            if let cached = vmCache[seed.bundleID], now.timeIntervalSince(cached.at) < 60 {
+                containersIdle[seed.bundleID] = cached.idle
+            } else {
+                let idle = await Self.containersIdle(socket: sock)
+                vmCache[seed.bundleID] = (now, idle)
+                containersIdle[seed.bundleID] = idle
+            }
+        }
+
+        // 6. The machine.
         let cpuBusy = systemCPU()
         let mem = Self.memory()
         var load = [Double](repeating: 0, count: 3)
@@ -106,7 +134,8 @@ actor Sampler {
         let fullscreen = front.map { win.fullscreen.contains($0.pid) } ?? false
 
         return Sample(at: now, procs: procs, children: children, apps: apps, sims: sims, managedPids: managed, args: args,
-                      listening: listening, frontmost: frontmost, fullscreen: fullscreen, cpuBusy: cpuBusy, load1: load[0],
+                      listening: listening, established: established, containersIdle: containersIdle, frontmost: frontmost,
+                      fullscreen: fullscreen, cpuBusy: cpuBusy, load1: load[0],
                       cores: ProcessInfo.processInfo.activeProcessorCount, memUsed: mem.used,
                       memTotal: ProcessInfo.processInfo.physicalMemory, compressed: mem.compressed, swapUsed: mem.swap,
                       pressure: Self.pressure(), thermal: ProcessInfo.processInfo.thermalState.rawValue,
@@ -139,12 +168,13 @@ actor Sampler {
         }
     }
 
-    nonisolated static func footprint(_ pid: pid_t) -> UInt64? {
+    /// Real memory footprint and lifetime disk traffic; only answers for our own processes.
+    nonisolated static func rusage(_ pid: pid_t) -> (footprint: UInt64, io: UInt64)? {
         var info = rusage_info_v4()
         let ok = withUnsafeMutablePointer(to: &info) { p in
             p.withMemoryRebound(to: rusage_info_t?.self, capacity: 1) { proc_pid_rusage(pid, RUSAGE_INFO_V4, $0) }
         }
-        return ok == 0 ? info.ri_phys_footprint : nil
+        return ok == 0 ? (info.ri_phys_footprint, info.ri_diskio_bytesread &+ info.ri_diskio_byteswritten) : nil
     }
 
     nonisolated static func args(_ pid: pid_t) -> [String] {
@@ -167,19 +197,34 @@ actor Sampler {
         return out
     }
 
-    /// True when the process has a TCP socket in LISTEN state (a server of some kind).
-    nonisolated static func listens(_ pid: pid_t) -> Bool {
+    /// TCP sockets of a process: does it listen (a server), and how many connections are open right now (someone using it).
+    nonisolated static func sockets(_ pid: pid_t) -> (listening: Bool, established: Int) {
         let bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
-        guard bytes > 0 else { return false }
+        guard bytes > 0 else { return (false, 0) }
         var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(bytes) / MemoryLayout<proc_fdinfo>.size + 16)
         let got = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fds, Int32(fds.count * MemoryLayout<proc_fdinfo>.size))
-        guard got > 0 else { return false }
+        guard got > 0 else { return (false, 0) }
+        var listening = false
+        var established = 0
         for fd in fds.prefix(Int(got) / MemoryLayout<proc_fdinfo>.size) where fd.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET) {
             var si = socket_fdinfo()
             guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDSOCKETINFO, &si, Int32(MemoryLayout<socket_fdinfo>.size)) > 0 else { continue }
-            if si.psi.soi_kind == SOCKINFO_TCP, si.psi.soi_proto.pri_tcp.tcpsi_state == TSI_S_LISTEN { return true }
+            guard si.psi.soi_kind == SOCKINFO_TCP else { continue }
+            switch si.psi.soi_proto.pri_tcp.tcpsi_state {
+            case TSI_S_LISTEN: listening = true
+            case TSI_S_ESTABLISHED: established += 1
+            default: break
+            }
         }
-        return false
+        return (listening, established)
+    }
+
+    /// True when the Docker socket answers and lists no containers. Any failure counts as "in use".
+    nonisolated static func containersIdle(socket: String) async -> Bool {
+        guard FileManager.default.fileExists(atPath: socket),
+              let r = await Shell.run("/usr/bin/curl", ["-s", "--max-time", "5", "--unix-socket", socket, "http://localhost/containers/json"], timeout: 8),
+              r.status == 0 else { return false }
+        return r.out.trimmingCharacters(in: .whitespacesAndNewlines) == "[]"
     }
 
     // MARK: - Windows and audio

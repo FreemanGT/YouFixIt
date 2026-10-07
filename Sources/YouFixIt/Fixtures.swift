@@ -13,6 +13,8 @@ enum Fixtures {
         var managed: Set<pid_t> = []
         var args: [pid_t: [String]] = [:]
         var listening: Set<pid_t> = []
+        var established: [pid_t: Int] = [:]
+        var containersIdle: [String: Bool] = [:]
         var frontmost: pid_t = 0
         var pressure = 1
         var load1 = 3.0
@@ -26,15 +28,16 @@ enum Fixtures {
     }
 
     static func proc(_ pid: pid_t, _ ppid: pid_t, _ name: String, path: String? = nil, uid: uid_t = Sampler.me,
-                     ago: TimeInterval, cpu: Double = 0, mb: UInt64 = 10) -> Sample.Proc {
+                     ago: TimeInterval, cpu: Double = 0, mb: UInt64 = 10, io: UInt64 = 0) -> Sample.Proc {
         Sample.Proc(pid: pid, ppid: ppid, uid: uid, name: name, path: path ?? "/Users/me/bin/\(name)",
-                    start: now.addingTimeInterval(-ago), cpu: cpu, footprint: mb << 20)
+                    start: now.addingTimeInterval(-ago), cpu: cpu, footprint: mb << 20, diskIO: io)
     }
 
     static func app(_ pid: pid_t, _ bundle: String, _ name: String, activatedAgo: TimeInterval = 10_800, windows: Int = 0,
-                    hidden: Bool = false, active: Bool = false, modal: Bool = false, audio: Bool = false, launchedAgo: TimeInterval = 20_000) -> Sample.App {
-        Sample.App(pid: pid, bundleID: bundle, name: name, url: URL(fileURLWithPath: "/Applications/\(name).app"), regular: true,
-                   hidden: hidden, active: active, launched: now.addingTimeInterval(-launchedAgo),
+                    hidden: Bool = false, active: Bool = false, modal: Bool = false, audio: Bool = false, launchedAgo: TimeInterval = 20_000,
+                    accessory: Bool = false) -> Sample.App {
+        Sample.App(pid: pid, bundleID: bundle, name: name, url: URL(fileURLWithPath: "/Applications/\(name).app"), regular: !accessory,
+                   accessory: accessory, hidden: hidden, active: active, launched: now.addingTimeInterval(-launchedAgo),
                    lastActivated: now.addingTimeInterval(-activatedAgo), windows: windows, hasModal: modal, audio: audio)
     }
 
@@ -51,7 +54,8 @@ enum Fixtures {
                 children[p.ppid, default: []].append(p.pid)
             }
             return Sample(at: at, procs: procs, children: children, apps: spec.apps, sims: spec.sims, managedPids: spec.managed,
-                          args: spec.args, listening: spec.listening, frontmost: spec.frontmost, fullscreen: false,
+                          args: spec.args, listening: spec.listening, established: spec.established, containersIdle: spec.containersIdle,
+                          frontmost: spec.frontmost, fullscreen: false,
                           cpuBusy: spec.cpuBusy, load1: spec.load1, cores: 16, memUsed: spec.memUsed, memTotal: 48 << 30,
                           compressed: spec.compressed, swapUsed: spec.swap, pressure: spec.pressure, thermal: spec.thermal,
                           booted: spec.booted, loggedIn: spec.loggedIn)
@@ -87,11 +91,17 @@ enum Fixtures {
         return s
     }
 
-    /// An `expo start` whose shell and Claude session are gone: npm exec (node) adopted by launchd, child node listening on 8081.
-    static var expoOrphan: Spec {
+    /// The same Mac with the simulator shut down: the base for everything else.
+    static var quiet: Spec {
         var s = simIdle
         s.sims = []
         s.procs.removeAll { $0.name == "launchd_sim" || $0.ppid == 29335 }
+        return s
+    }
+
+    /// An `expo start` whose shell and Claude session are gone: npm exec (node) adopted by launchd, child node listening on 8081.
+    static var expoOrphan: Spec {
+        var s = quiet
         s.procs += [
             proc(36644, 1, "node", path: "/Users/me/.nvm/versions/node/v22/bin/node", ago: 10_800, mb: 300),
             proc(36677, 36644, "node", path: "/Users/me/.nvm/versions/node/v22/bin/node", ago: 10_790, cpu: 0.005, mb: 1000),
@@ -103,8 +113,7 @@ enum Fixtures {
 
     /// A headless Chrome a screenshot script left behind, data dir under /private/tmp, parent gone.
     static var headlessChrome: Spec {
-        var s = simIdle
-        s.sims = []
+        var s = quiet
         s.procs += [
             proc(19996, 1, "Google Chrome", path: "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", ago: 17_000, mb: 400),
             proc(19997, 19996, "Google Chrome Helper (Renderer)", path: "/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Helpers/Google Chrome Helper (Renderer).app/Contents/MacOS/Google Chrome Helper (Renderer)", ago: 16_990, mb: 200),
@@ -116,8 +125,7 @@ enum Fixtures {
 
     /// Chrome Beta with 40 renderers, untouched for hours: explained, never touched.
     static var chrome40: Spec {
-        var s = simIdle
-        s.sims = []
+        var s = quiet
         s.procs.append(proc(5000, 1, "Google Chrome Beta", path: "/Applications/Google Chrome Beta.app/Contents/MacOS/Google Chrome Beta", ago: 20_000, mb: 600))
         s.procs += (0..<40).map { proc(5100 + pid_t($0), 5000, "Google Chrome Beta Helper (Renderer)", path: "/Applications/Google Chrome Beta.app/Contents/Frameworks/x/Google Chrome Beta Helper (Renderer)", ago: 15_000, mb: 200) }
         s.apps.append(app(5000, "com.google.Chrome.beta", "Google Chrome Beta"))
@@ -126,8 +134,7 @@ enum Fixtures {
 
     /// FreeFlow at 1.3 GB, no window, untouched for three hours.
     static var freeflowIdle: Spec {
-        var s = simIdle
-        s.sims = []
+        var s = quiet
         s.procs.append(proc(7000, 1, "FreeFlow", path: "/Applications/FreeFlow.app/Contents/MacOS/FreeFlow", ago: 20_000, mb: 1300))
         s.apps.append(app(7000, "com.freemans.freeflow", "FreeFlow"))
         return s
@@ -135,9 +142,56 @@ enum Fixtures {
 
     /// Nine Claude Code sessions holding 4.5 GB: explained, never touched.
     static var claude9: Spec {
-        var s = simIdle
-        s.sims = []
+        var s = quiet
         s.procs += (0..<9).map { proc(60_000 + pid_t($0), 2646, "claude", path: "/Users/me/Library/Application Support/Claude/claude-code/2.1.289/x/claude.app/Contents/MacOS/claude", ago: 18_000, mb: 500) }
+        return s
+    }
+
+    /// Docker Desktop with its 3.3 GB machine up and no container running, untouched for hours.
+    static var dockerIdle: Spec {
+        var s = quiet
+        s.procs += [
+            proc(8000, 1, "Docker", path: "/Applications/Docker.app/Contents/MacOS/Docker", ago: 20_000, mb: 200),
+            proc(8001, 8000, "com.docker.backend", path: "/Applications/Docker.app/Contents/MacOS/com.docker.backend", ago: 19_990, mb: 300),
+            proc(8002, 8001, "com.docker.virtualization", path: "/Applications/Docker.app/Contents/MacOS/com.docker.virtualization", ago: 19_980, mb: 3300),
+        ]
+        s.apps.append(app(8000, "com.docker.docker", "Docker", accessory: true))
+        s.containersIdle = ["com.docker.docker": true]
+        return s
+    }
+
+    /// mysql (through mysqld_safe), postgres and redis started by launchd from Homebrew.
+    static var brewServices: Spec {
+        var s = quiet
+        s.procs += [
+            proc(8300, 1, "sh", path: "/bin/sh", ago: 29_000, mb: 2),
+            proc(8301, 8300, "mysqld", path: "/opt/homebrew/opt/mysql/bin/mysqld", ago: 29_000, mb: 400),
+            proc(8302, 1, "postgres", path: "/opt/homebrew/opt/postgresql@16/bin/postgres", ago: 29_000, mb: 150),
+            proc(8303, 1, "redis-server", path: "/opt/homebrew/opt/redis/bin/redis-server", ago: 29_000, mb: 60),
+        ]
+        return s
+    }
+
+    /// Three menu bar apps holding 1.8 GB between them.
+    static var menuBarApps: Spec {
+        var s = quiet
+        s.procs += [
+            proc(8201, 1, "Raycast", path: "/Applications/Raycast.app/Contents/MacOS/Raycast", ago: 20_000, mb: 900),
+            proc(8202, 1, "Setapp", path: "/Applications/Setapp.app/Contents/MacOS/Setapp", ago: 20_000, mb: 500),
+            proc(8203, 1, "CleanShot X", path: "/Applications/CleanShot X.app/Contents/MacOS/CleanShot X", ago: 20_000, mb: 400),
+        ]
+        s.apps += [
+            app(8201, "com.raycast.macos", "Raycast", accessory: true),
+            app(8202, "com.setapp.DesktopClient", "Setapp", accessory: true),
+            app(8203, "pl.maketheweb.cleanshotx", "CleanShot X", accessory: true),
+        ]
+        return s
+    }
+
+    /// A Gradle daemon at 90% of a core for the last hour while the user is in Stremio.
+    static var busyProgram: Spec {
+        var s = quiet
+        s.procs.append(proc(9000, 1, "java", path: "/Library/Java/JavaVirtualMachines/jdk/Contents/Home/bin/java", ago: 3000, cpu: 0.9, mb: 800))
         return s
     }
 
@@ -154,6 +208,12 @@ enum Fixtures {
         s.procs += chrome40.procs.filter { $0.pid >= 5000 && $0.pid < 5200 }
         s.apps.append(contentsOf: chrome40.apps.filter { $0.pid == 5000 })
         s.procs += claude9.procs.filter { $0.name == "claude" }
+        s.procs += dockerIdle.procs.filter { $0.pid >= 8000 && $0.pid < 8100 }
+        s.apps.append(contentsOf: dockerIdle.apps.filter { $0.pid == 8000 })
+        s.containersIdle = dockerIdle.containersIdle
+        s.procs += brewServices.procs.filter { $0.pid >= 8300 && $0.pid < 8400 }
+        s.procs += menuBarApps.procs.filter { $0.pid >= 8200 && $0.pid < 8300 }
+        s.apps.append(contentsOf: menuBarApps.apps)
         s.procs += [proc(400, 1, "mds_stores", path: "/System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Versions/A/Support/mds_stores", uid: 0, ago: 30_000, cpu: 0.25, mb: 600)]
         s.pressure = 2
         s.load1 = 175
@@ -166,9 +226,17 @@ enum Fixtures {
         DiskScan(at: now, items: [
             DiskScan.Item(kind: .derivedData, path: "/Users/me/Library/Developer/Xcode/DerivedData", name: "Xcode build cache", bytes: 1600 << 20, modified: nil),
             DiskScan.Item(kind: .devCache, path: "/Users/me/.npm/_cacache", name: "npm download cache", bytes: 22 << 30, modified: nil),
-            DiskScan.Item(kind: .orphanCache, path: "/Users/me/Library/Caches/com.example.gone", name: "Gone App", bytes: 600 << 20, modified: nil),
+            DiskScan.Item(kind: .orphanCache, path: "/Users/me/Library/Caches/com.example.goneapp", name: "com.example.goneapp", bytes: 600 << 20, modified: nil),
             DiskScan.Item(kind: .devCache, path: "/Users/me/Library/Caches/pip", name: "pip cache", bytes: 8 << 20, modified: nil),
+            DiskScan.Item(kind: .otherCache, path: "/Users/me/.cache/huggingface", name: "huggingface cache", bytes: 20 << 30, modified: nil),
         ], unavailableSims: 0, freeBytes: 255 << 30, totalBytes: 926 << 30)
+    }
+
+    /// The same disk while something writes into the Xcode build cache.
+    static var diskBusy: DiskScan {
+        let d = disk
+        return DiskScan(at: d.at, items: d.items.map { $0.kind == .derivedData ? DiskScan.Item(kind: $0.kind, path: $0.path, name: $0.name, bytes: $0.bytes, modified: nil, busy: true) : $0 },
+                        unavailableSims: 0, freeBytes: d.freeBytes, totalBytes: d.totalBytes)
     }
 
     static func spec(named name: String) -> Spec? {
@@ -179,8 +247,12 @@ enum Fixtures {
         case "chrome40": chrome40
         case "freeflowIdle": freeflowIdle
         case "claude9": claude9
+        case "dockerIdle": dockerIdle
+        case "brewServices": brewServices
+        case "menuBarApps": menuBarApps
+        case "busyProgram": busyProgram
         case "heavy": heavy
-        case "calm": { var s = simIdle; s.sims = []; s.procs.removeAll { $0.ppid == 29335 || $0.name == "launchd_sim" }; return s }()
+        case "calm": quiet
         default: nil
         }
     }
@@ -200,6 +272,7 @@ func runSelfTest() {
         Rules.findings(history: Fixtures.history(spec, tweak: tweak), disk: disk, keep: keep, tuning: t)
     }
     func acts(_ f: [Finding]) -> [String] { f.filter(\.actionable).map(\.id).sorted() }
+    func knows(_ f: [Finding], _ prefix: String) -> Bool { f.contains { !$0.actionable && $0.id.hasPrefix(prefix) } }
 
     print("simulator")
     let sim = ids(Fixtures.simIdle)
@@ -224,22 +297,25 @@ func runSelfTest() {
     }).isEmpty, "a server whose Claude session is alive is in use")
     check(acts(ids(Fixtures.expoOrphan) { _, s in s.managed.insert(36644) }).isEmpty, "a launchd job is not an orphan")
     check(acts(ids(Fixtures.expoOrphan) { _, s in s.procs = s.procs.map { $0.pid == 36644 ? Fixtures.proc(36644, 1, "node", path: "/Applications/Stremio.app/Contents/MacOS/node", ago: 10_800, mb: 300) : $0 } }).isEmpty, "node inside an app bundle belongs to that app")
-    check(acts(ids(Fixtures.expoOrphan) { _, s in s.listening = [] }).isEmpty, "no listening socket, no server")
+    let watcher = ids(Fixtures.expoOrphan) { _, s in s.listening = [] }
+    check(acts(watcher).isEmpty && knows(watcher, "know:leftover-watcher:36644"), "no listening socket, no server: a watcher is explained only")
+    let connected = ids(Fixtures.expoOrphan) { _, s in s.established = [36677: 1] }
+    check(acts(connected).isEmpty && knows(connected, "know:leftover-server:36644"), "a server something is connected to is explained, not stopped")
     let py = ids(Fixtures.expoOrphan) { _, s in s.procs = s.procs.map { $0.pid == 36644 ? Fixtures.proc(36644, 1, "python3", ago: 10_800, mb: 900) : $0 } }
-    check(acts(py).isEmpty && py.contains { $0.id.hasPrefix("know:leftover:36644") }, "a python leftover is explained, not stopped")
+    check(acts(py).isEmpty && knows(py, "know:leftover:36644"), "a python leftover is explained, not stopped")
 
     print("test browser")
     let chrome = ids(Fixtures.headlessChrome)
     check(acts(chrome).count == 1 && acts(chrome)[0].hasPrefix("browser:19996:"), "orphaned headless Chrome is the finding: \(acts(chrome))")
     let live = ids(Fixtures.headlessChrome) { _, s in s.procs = s.procs.map { $0.pid == 19996 ? Fixtures.proc(19996, 2646, "Google Chrome", path: $0.path, ago: 17_000, mb: 400) : $0 } }
-    check(acts(live).isEmpty && live.contains { $0.id == "know:testbrowser:19996" }, "a script's live browser is explained only")
+    check(acts(live).isEmpty && knows(live, "know:testbrowser:19996"), "a script's live browser is explained only")
     check(acts(ids(Fixtures.headlessChrome) { _, s in s.args[19996] = ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "--headless=new", "--user-data-dir=/Users/me/Library/Application Support/Google/Chrome"] }).isEmpty, "a real profile is never touched")
 
     print("browser tabs and Claude sessions")
     let tabs = ids(Fixtures.chrome40)
-    check(acts(tabs).isEmpty && tabs.contains { $0.id == "know:tabs:com.google.Chrome.beta" }, "forty tabs are explained, never closed")
+    check(acts(tabs).isEmpty && knows(tabs, "know:tabs:com.google.Chrome.beta"), "forty tabs are explained, never closed")
     let claude = ids(Fixtures.claude9)
-    check(acts(claude).isEmpty && claude.contains { $0.id == "know:claude" }, "nine Claude sessions are explained, never closed")
+    check(acts(claude).isEmpty && knows(claude, "know:claude"), "nine Claude sessions are explained, never closed")
 
     print("idle app")
     let ff = ids(Fixtures.freeflowIdle)
@@ -251,16 +327,64 @@ func runSelfTest() {
     check(acts(ids(Fixtures.freeflowIdle, keep: ["com.freemans.freeflow"])).isEmpty, "a kept app stays")
     check(acts(ids(Fixtures.freeflowIdle) { _, s in s.frontmost = 7000 }).isEmpty, "the frontmost app stays")
     check(acts(ids(Fixtures.freeflowIdle) { _, s in s.procs = s.procs.map { $0.pid == 7000 ? Fixtures.proc(7000, 1, "FreeFlow", path: $0.path, ago: 20_000, mb: 200) : $0 } }).isEmpty, "a small idle app is not worth a row")
+    check(acts(ids(Fixtures.freeflowIdle) { _, s in s.procs = s.procs.map { $0.pid == 7000 ? Fixtures.proc(7000, 1, "FreeFlow", path: $0.path, ago: 20_000, mb: 300) : $0 } }) == ["app:com.freemans.freeflow"], "300 MB idle is worth a row")
+
+    print("working apps stay")
+    func exporting(cpu: Double, writing: Bool) -> (Int, inout Fixtures.Spec) -> Void {
+        { i, s in s.procs = s.procs.map { $0.pid == 7000 ? Fixtures.proc(7000, 1, "FreeFlow", path: $0.path, ago: 20_000, cpu: cpu, mb: 1300, io: writing ? UInt64(i) * (100 << 20) : 0) : $0 } }
+    }
+    check(acts(ids(Fixtures.freeflowIdle, tweak: exporting(cpu: 0.2, writing: true))).isEmpty, "an app exporting in the background is never a row")
+    check(acts(ids(Fixtures.freeflowIdle, tweak: exporting(cpu: 0, writing: true))).isEmpty, "quiet CPU but heavy disk traffic still means working")
+    check(acts(ids(Fixtures.freeflowIdle, tweak: exporting(cpu: 0.2, writing: false))).isEmpty, "steady CPU with no window still means working")
+    let working = Fixtures.history(Fixtures.freeflowIdle, tweak: exporting(cpu: 0, writing: true))
+    check(Safety.refusal(working.last!.procs[7000]!, app: working.last!.app(7000), in: working.last!, history: working, keep: [], tuning: t) == Copy.refusedBusy,
+          "the safety check names the reason: busy")
+
+    print("virtual machines")
+    let docker = ids(Fixtures.dockerIdle)
+    check(acts(docker) == ["vm:com.docker.docker"], "idle Docker with no containers is the finding: \(acts(docker))")
+    check((docker.first { $0.id == "vm:com.docker.docker" }?.bytes ?? 0) >= 3 << 30, "estimate counts the whole machine")
+    check(acts(ids(Fixtures.dockerIdle) { _, s in s.containersIdle["com.docker.docker"] = false }).isEmpty, "a running container means in use")
+    check(acts(ids(Fixtures.dockerIdle) { _, s in s.containersIdle = [:] }).isEmpty, "no answer from Docker means in use")
+    check(acts(ids(Fixtures.dockerIdle) { _, s in s.procs = s.procs.map { $0.pid == 8002 ? Fixtures.proc(8002, 8001, "com.docker.virtualization", path: $0.path, ago: 19_980, cpu: 0.1, mb: 3300) : $0 } }).isEmpty, "a busy machine stays")
+    check(acts(ids(Fixtures.dockerIdle) { _, s in s.apps = s.apps.map { $0.pid == 8000 ? Fixtures.app(8000, $0.bundleID, $0.name, launchedAgo: 600, accessory: true) : $0 } }).isEmpty, "opened ten minutes ago is too soon")
+    let parallels = ids(Fixtures.dockerIdle) { _, s in
+        s.procs.append(Fixtures.proc(8100, 1, "prl_client_app", path: "/Applications/Parallels Desktop.app/Contents/MacOS/prl_client_app", ago: 20_000, mb: 4000))
+        s.apps.append(Fixtures.app(8100, "com.parallels.desktop.console", "Parallels Desktop"))
+    }
+    check(!acts(parallels).contains("app:com.parallels.desktop.console") && knows(parallels, "know:vm:com.parallels.desktop.console"), "Parallels is explained, never quit")
+
+    print("background services and menu bar apps")
+    let brew = ids(Fixtures.brewServices)
+    check(acts(brew).isEmpty && brew.contains { $0.id == "know:brew" && $0.why.contains("mysqld") && $0.why.contains("redis-server") }, "Homebrew services are explained: \(brew.filter { $0.id == "know:brew" }.map(\.why))")
+    let bar = ids(Fixtures.menuBarApps)
+    check(acts(bar).isEmpty && bar.contains { $0.id == "know:menubar" && $0.why.contains("Raycast") }, "menu bar apps holding memory are explained")
+    check(!knows(ids(Fixtures.menuBarApps) { _, s in s.procs = s.procs.map { $0.pid == 8201 ? Fixtures.proc(8201, 1, "Raycast", path: $0.path, ago: 20_000, mb: 200) : $0 } }, "know:menubar"), "under a gigabyte and a half is not worth a row")
+
+    print("busy programs")
+    let busy = ids(Fixtures.busyProgram)
+    check(acts(busy).isEmpty && knows(busy, "know:busy:9000"), "a java tree at 90% for minutes is explained: \(busy.map(\.id).filter { $0.hasPrefix("know:busy") })")
+    let building = ids(Fixtures.busyProgram) { _, s in
+        s.procs.append(Fixtures.proc(9500, 1, "Xcode", path: "/Applications/Xcode.app/Contents/MacOS/Xcode", ago: 20_000, mb: 2000))
+        s.procs = s.procs.map { $0.pid == 9000 ? Fixtures.proc(9000, 9500, "java", path: $0.path, ago: 3000, cpu: 0.9, mb: 800) : $0 }
+        s.apps.append(Fixtures.app(9500, "com.apple.dt.Xcode", "Xcode", activatedAgo: 0, windows: 2, active: true))
+        s.frontmost = 9500
+    }
+    check(!knows(building, "know:busy:"), "a build under the app in front is expected work")
+    check(!knows(ids(Fixtures.quiet), "know:busy:"), "a quiet Mac has no busy row")
 
     print("safety")
-    let s = Fixtures.history(Fixtures.simIdle).last!
-    check(Safety.refusal(Fixtures.proc(400, 1, "mds_stores", path: "/System/Library/x/mds_stores", uid: 0, ago: 100), app: nil, in: s, keep: [], tuning: t) != nil, "root process refused")
-    check(Safety.refusal(Fixtures.proc(401, 1, "thing", path: "/System/Library/CoreServices/thing", ago: 100), app: nil, in: s, keep: [], tuning: t) != nil, "/System path refused")
-    check(Safety.refusal(Fixtures.proc(402, 1, "WindowServer", ago: 100), app: nil, in: s, keep: [], tuning: t) != nil, "WindowServer refused")
-    check(Safety.refusal(s.procs[31542]!, app: s.app(31542), in: s, keep: [], tuning: t) != nil, "frontmost app refused")
-    check(Safety.refusal(Fixtures.proc(ProcessInfo.processInfo.processIdentifier, 1, "YouFixIt", ago: 100), app: nil, in: s, keep: [], tuning: t) != nil, "our own process refused")
-    check(Safety.refusal(s.procs[2646]!, app: s.app(2646), in: s, keep: [], tuning: t) != nil, "Claude refused")
-    check(Safety.refusal(Fixtures.proc(7000, 1, "FreeFlow", path: "/Applications/FreeFlow.app/Contents/MacOS/FreeFlow", ago: 100), app: Fixtures.app(7000, "com.freemans.freeflow", "FreeFlow"), in: s, keep: [], tuning: t) == nil, "an ordinary idle app may be acted on")
+    let hist = Fixtures.history(Fixtures.simIdle)
+    let s = hist.last!
+    check(Safety.refusal(Fixtures.proc(400, 1, "mds_stores", path: "/System/Library/x/mds_stores", uid: 0, ago: 100), app: nil, in: s, history: hist, keep: [], tuning: t) != nil, "root process refused")
+    check(Safety.refusal(Fixtures.proc(401, 1, "thing", path: "/System/Library/CoreServices/thing", ago: 100), app: nil, in: s, history: hist, keep: [], tuning: t) != nil, "/System path refused")
+    check(Safety.refusal(Fixtures.proc(402, 1, "WindowServer", ago: 100), app: nil, in: s, history: hist, keep: [], tuning: t) != nil, "WindowServer refused")
+    check(Safety.refusal(s.procs[31542]!, app: s.app(31542), in: s, history: hist, keep: [], tuning: t) != nil, "frontmost app refused")
+    check(Safety.refusal(Fixtures.proc(ProcessInfo.processInfo.processIdentifier, 1, "YouFixIt", ago: 100), app: nil, in: s, history: hist, keep: [], tuning: t) != nil, "our own process refused")
+    check(Safety.refusal(s.procs[2646]!, app: s.app(2646), in: s, history: hist, keep: [], tuning: t) != nil, "Claude refused")
+    check(Safety.refusal(Fixtures.proc(7100, 1, "WhatsApp", path: "/Applications/WhatsApp.app/Contents/MacOS/WhatsApp", ago: 100), app: Fixtures.app(7100, "net.whatsapp.WhatsApp", "WhatsApp"), in: s, history: hist, keep: [], tuning: t) == Copy.refusedEssential, "WhatsApp is essential")
+    check(Safety.refusal(Fixtures.proc(7101, 1, "idea", path: "/Applications/IntelliJ IDEA.app/Contents/MacOS/idea", ago: 100), app: Fixtures.app(7101, "com.jetbrains.intellij", "IntelliJ IDEA"), in: s, history: hist, keep: [], tuning: t) == Copy.refusedEssential, "JetBrains apps are essential by prefix")
+    check(Safety.refusal(Fixtures.proc(7000, 1, "FreeFlow", path: "/Applications/FreeFlow.app/Contents/MacOS/FreeFlow", ago: 100), app: Fixtures.app(7000, "com.freemans.freeflow", "FreeFlow"), in: s, history: hist, keep: [], tuning: t) == nil, "an ordinary idle app may be acted on")
 
     print("spike")
     var spike = Spike()
@@ -280,16 +404,20 @@ func runSelfTest() {
     let space = ids(Fixtures.simIdle, disk: Fixtures.disk)
     check(acts(space).contains("path:/Users/me/Library/Developer/Xcode/DerivedData"), "build cache row")
     check(acts(space).contains("path:/Users/me/.npm/_cacache"), "npm cache row")
-    check(acts(space).contains("path:/Users/me/Library/Caches/com.example.gone"), "orphan cache row")
+    check(acts(space).contains("path:/Users/me/Library/Caches/com.example.goneapp"), "orphan cache row")
     check(!acts(space).contains("path:/Users/me/Library/Caches/pip"), "a small cache is not worth a row")
+    check(!acts(space).contains("path:/Users/me/.cache/huggingface") && knows(space, "know:cache:/Users/me/.cache/huggingface"), "a cache that needs reinstalling is explained, not trashed")
     check(!acts(ids(Fixtures.simIdle, disk: Fixtures.disk) { _, s in s.procs.append(Fixtures.proc(95_000, 1, "Xcode", path: "/Applications/Xcode.app/Contents/MacOS/Xcode", ago: 3000)) }).contains("path:/Users/me/Library/Developer/Xcode/DerivedData"), "Xcode open keeps its build cache")
+    check(!acts(ids(Fixtures.simIdle, disk: Fixtures.diskBusy)).contains("path:/Users/me/Library/Developer/Xcode/DerivedData"), "a cache being written to is not a row")
+    check(!acts(ids(Fixtures.simIdle, disk: Fixtures.disk) { _, s in s.procs.append(Fixtures.proc(95_001, 1, "GoneApp", path: "/Users/me/Applications/GoneApp.app/Contents/MacOS/GoneApp", ago: 3000)) }).contains("path:/Users/me/Library/Caches/com.example.goneapp"),
+          "a cache whose program is running is not an orphan")
 
     print("wording")
     check(Format.size(1300 << 20) == "1.3 GB" && Format.size(900 << 20) == "900 MB" && Format.size(22 << 30) == "22 GB" && Format.size(9 << 30) == "9 GB",
           "sizes read as people say them: \(Format.size(1300 << 20)) \(Format.size(900 << 20)) \(Format.size(22 << 30)) \(Format.size(9 << 30))")
     check(Copy.frees(memory: 3400 << 20, space: 9 << 30) == "Frees about 3.3 GB of memory and 9 GB of space", "button caption: \(Copy.frees(memory: 3400 << 20, space: 9 << 30))")
-    for f in ids(Fixtures.heavy, disk: Fixtures.disk) {
-        check(!f.why.contains("—") && !f.why.contains("!") && f.why.count < 140, "plain why line for \(f.id)")
+    for f in ids(Fixtures.heavy, disk: Fixtures.disk) + ids(Fixtures.busyProgram) {
+        check(!f.why.contains("—") && !f.why.contains("!") && f.why.count < 140, "plain why line for \(f.id) (\(f.why.count))")
     }
 
     print(failures == 0 ? "selftest passed" : "selftest FAILED: \(failures)")
