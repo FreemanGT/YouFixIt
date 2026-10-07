@@ -1,0 +1,24 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "display-p3:0.976,0.965,0.937,1",
+      "display-p3:0.925,0.906,0.863,1"
+    ],
+    "orientation": {
+      "start": { "x": 0.5, "y": 0 },
+      "stop": { "x": 0.5, "y": 1 }
+    }
+  },
+  "groups": [
+    {
+      "name": "Pebble",
+      "layers": [
+        { "glass": true, "image-name": "pebble.svg", "name": "pebble" },
+        { "glass": false, "image-name": "eyes.svg", "name": "eyes" }
+      ],
+      "shadow": { "kind": "neutral", "opacity": 0.5 },
+      "translucency": { "enabled": false, "value": 0 }
+    }
+  ],
+  "supported-platforms": { "squares": [ "macOS" ] }
+}
