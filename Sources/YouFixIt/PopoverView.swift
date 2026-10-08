@@ -8,6 +8,7 @@ struct PopoverView: View {
     @Bindable var engine: Engine
     @State var pane: Pane = .main
     @State var knowOpen = false
+    @State private var size = CGSize.zero
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -18,6 +19,8 @@ struct PopoverView: View {
             }
         }
         .frame(width: Theme.popoverWidth)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+        .background(WindowFit(size: size))
         .tint(Theme.tint)
         .animation(reduceMotion ? .easeInOut(duration: Theme.state) : Theme.settle, value: pane)
         .onAppear { engine.popoverOpen = true }
@@ -293,4 +296,32 @@ struct MeasuredScroll<Content: View>: View {
             }
         )
     }
+}
+
+/// MenuBarExtra's panel grows with its content but never shrinks back, which leaves the view centred in a tall
+/// window with see-through bands above and below. Keep the panel the size of the content, top edge pinned
+/// (AppKit frames grow from the bottom-left, and the panel hangs from the menu bar).
+struct WindowFit: NSViewRepresentable {
+    let size: CGSize
+
+    final class Fitter: NSView {
+        var size = CGSize.zero { didSet { fit() } }
+        override func viewDidMoveToWindow() { super.viewDidMoveToWindow(); fit() }
+
+        func fit() {
+            guard let window, size != .zero,
+                  size.height.rounded() != window.frame.height.rounded() || size.width.rounded() != window.frame.width.rounded()
+            else { return }
+            var frame = window.frame
+            frame.origin.y += frame.height - size.height
+            frame.size = size
+            // The hosting view pins contentMinSize at the tallest size it has laid out; only ever lower it.
+            window.contentMinSize = CGSize(width: min(window.contentMinSize.width, size.width),
+                                           height: min(window.contentMinSize.height, size.height))
+            window.setFrame(frame, display: true)
+        }
+    }
+
+    func makeNSView(context: Context) -> Fitter { Fitter() }
+    func updateNSView(_ view: Fitter, context: Context) { DispatchQueue.main.async { view.size = size } }
 }
