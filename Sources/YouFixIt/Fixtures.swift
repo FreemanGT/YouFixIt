@@ -10,8 +10,9 @@ enum Fixtures {
         var procs: [Sample.Proc] = []
         var apps: [Sample.App] = []
         var sims: [Sample.Sim] = []
-        var managed: Set<pid_t> = []
+        var jobs: [pid_t: String] = [:]
         var args: [pid_t: [String]] = [:]
+        var cwd: [pid_t: String] = [:]
         var listening: Set<pid_t> = []
         var established: [pid_t: Int] = [:]
         var containersIdle: [String: Bool] = [:]
@@ -53,8 +54,8 @@ enum Fixtures {
                 procs[p.pid] = p
                 children[p.ppid, default: []].append(p.pid)
             }
-            return Sample(at: at, procs: procs, children: children, apps: spec.apps, sims: spec.sims, managedPids: spec.managed,
-                          args: spec.args, listening: spec.listening, established: spec.established, containersIdle: spec.containersIdle,
+            return Sample(at: at, procs: procs, children: children, apps: spec.apps, sims: spec.sims, jobs: spec.jobs,
+                          args: spec.args, cwd: spec.cwd, listening: spec.listening, established: spec.established, containersIdle: spec.containersIdle,
                           frontmost: spec.frontmost, fullscreen: false,
                           cpuBusy: spec.cpuBusy, load1: spec.load1, cores: 16, memUsed: spec.memUsed, memTotal: 48 << 30,
                           compressed: spec.compressed, swapUsed: spec.swap, pressure: spec.pressure, thermal: spec.thermal,
@@ -140,10 +141,11 @@ enum Fixtures {
         return s
     }
 
-    /// Nine Claude Code sessions holding 4.5 GB: explained, never touched.
+    /// Nine Claude Code sessions holding 4.5 GB: explained, never touched. Three have a known project folder.
     static var claude9: Spec {
         var s = quiet
         s.procs += (0..<9).map { proc(60_000 + pid_t($0), 2646, "claude", path: "/Users/me/Library/Application Support/Claude/claude-code/2.1.289/x/claude.app/Contents/MacOS/claude", ago: 18_000, mb: 500) }
+        s.cwd = [60_000: "/Users/me/Saves", 60_001: "/Users/me/Saves", 60_002: "/Users/me/Ai Projects/YouFixIT"]
         return s
     }
 
@@ -160,15 +162,19 @@ enum Fixtures {
         return s
     }
 
-    /// mysql (through mysqld_safe), postgres and redis started by launchd from Homebrew.
+    /// mysql (through mysqld_safe), postgres (with two helpers) and redis, started by launchd from Homebrew at login.
     static var brewServices: Spec {
         var s = quiet
         s.procs += [
             proc(8300, 1, "sh", path: "/bin/sh", ago: 29_000, mb: 2),
             proc(8301, 8300, "mysqld", path: "/opt/homebrew/opt/mysql/bin/mysqld", ago: 29_000, mb: 400),
             proc(8302, 1, "postgres", path: "/opt/homebrew/opt/postgresql@16/bin/postgres", ago: 29_000, mb: 150),
+            proc(8310, 8302, "postgres", path: "/opt/homebrew/opt/postgresql@16/bin/postgres", ago: 28_990, mb: 20),
+            proc(8311, 8302, "postgres", path: "/opt/homebrew/opt/postgresql@16/bin/postgres", ago: 28_990, mb: 20),
             proc(8303, 1, "redis-server", path: "/opt/homebrew/opt/redis/bin/redis-server", ago: 29_000, mb: 60),
         ]
+        // Both label namings Homebrew has used: sh.brew.* is what brew services writes today, homebrew.mxcl.* what it wrote before.
+        s.jobs = [8300: "homebrew.mxcl.mysql", 8302: "sh.brew.postgresql@16", 8303: "homebrew.mxcl.redis"]
         return s
     }
 
@@ -208,10 +214,12 @@ enum Fixtures {
         s.procs += chrome40.procs.filter { $0.pid >= 5000 && $0.pid < 5200 }
         s.apps.append(contentsOf: chrome40.apps.filter { $0.pid == 5000 })
         s.procs += claude9.procs.filter { $0.name == "claude" }
+        s.cwd.merge(claude9.cwd) { a, _ in a }
         s.procs += dockerIdle.procs.filter { $0.pid >= 8000 && $0.pid < 8100 }
         s.apps.append(contentsOf: dockerIdle.apps.filter { $0.pid == 8000 })
         s.containersIdle = dockerIdle.containersIdle
         s.procs += brewServices.procs.filter { $0.pid >= 8300 && $0.pid < 8400 }
+        s.jobs.merge(brewServices.jobs) { a, _ in a }
         s.procs += menuBarApps.procs.filter { $0.pid >= 8200 && $0.pid < 8300 }
         s.apps.append(contentsOf: menuBarApps.apps)
         s.procs += [proc(400, 1, "mds_stores", path: "/System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Versions/A/Support/mds_stores", uid: 0, ago: 30_000, cpu: 0.25, mb: 600)]
@@ -291,11 +299,14 @@ func runSelfTest() {
     let expo = ids(Fixtures.expoOrphan)
     check(acts(expo).count == 1 && acts(expo)[0].hasPrefix("orphan:36644:"), "orphaned expo root is the finding: \(acts(expo))")
     check(expo.first { $0.id.hasPrefix("orphan:") }?.name == "expo start", "named after its command")
+    check(Rules.command(["node", "--liftoff-only", "/Users/me/lib/codegraph.js"], fallback: "node") == "codegraph.js"
+          && Rules.command(["node", "server.js"], fallback: "node") == "server.js" && Rules.command(["node"], fallback: "node") == "node",
+          "flags before the script do not become the name")
     check(acts(ids(Fixtures.expoOrphan) { _, s in
         s.procs.append(Fixtures.proc(61_356, 2646, "claude", ago: 12_000))
         s.procs = s.procs.map { $0.pid == 36644 ? Fixtures.proc(36644, 61_356, "node", path: $0.path, ago: 10_800, mb: 300) : $0 }
     }).isEmpty, "a server whose Claude session is alive is in use")
-    check(acts(ids(Fixtures.expoOrphan) { _, s in s.managed.insert(36644) }).isEmpty, "a launchd job is not an orphan")
+    check(acts(ids(Fixtures.expoOrphan) { _, s in s.jobs[36644] = "com.example.job" }).isEmpty, "a launchd job is not an orphan")
     check(acts(ids(Fixtures.expoOrphan) { _, s in s.procs = s.procs.map { $0.pid == 36644 ? Fixtures.proc(36644, 1, "node", path: "/Applications/Stremio.app/Contents/MacOS/node", ago: 10_800, mb: 300) : $0 } }).isEmpty, "node inside an app bundle belongs to that app")
     let watcher = ids(Fixtures.expoOrphan) { _, s in s.listening = [] }
     check(acts(watcher).isEmpty && knows(watcher, "know:leftover-watcher:36644"), "no listening socket, no server: a watcher is explained only")
@@ -316,6 +327,10 @@ func runSelfTest() {
     check(acts(tabs).isEmpty && knows(tabs, "know:tabs:com.google.Chrome.beta"), "forty tabs are explained, never closed")
     let claude = ids(Fixtures.claude9)
     check(acts(claude).isEmpty && knows(claude, "know:claude"), "nine Claude sessions are explained, never closed")
+    let claudeWhy = claude.first { $0.id == "know:claude" }?.why ?? ""
+    check(claudeWhy.contains("Saves") && claudeWhy.contains("YouFixIT") && claudeWhy.count < 140, "quiet sessions are named by project folder: \(claudeWhy)")
+    check(ids(Fixtures.claude9) { _, s in s.cwd = [:] }.first { $0.id == "know:claude" }?.why.contains("sidebar frees memory") == true, "without folders the row keeps its plain sentence")
+    check(claude.first { $0.id == "know:claude" }?.link?.title == Copy.showApp("Claude"), "the Claude row links to Claude")
 
     print("idle app")
     let ff = ids(Fixtures.freeflowIdle)
@@ -354,11 +369,30 @@ func runSelfTest() {
     }
     check(!acts(parallels).contains("app:com.parallels.desktop.console") && knows(parallels, "know:vm:com.parallels.desktop.console"), "Parallels is explained, never quit")
 
-    print("background services and menu bar apps")
+    print("Homebrew services")
     let brew = ids(Fixtures.brewServices)
-    check(acts(brew).isEmpty && brew.contains { $0.id == "know:brew" && $0.why.contains("mysqld") && $0.why.contains("redis-server") }, "Homebrew services are explained: \(brew.filter { $0.id == "know:brew" }.map(\.why))")
+    check(acts(brew) == ["brew:mysql", "brew:postgresql@16"], "idle services are the findings, one behind a wrapper script included, a 60 MB one not: \(acts(brew))")
+    check((brew.first { $0.id == "brew:postgresql@16" }?.bytes ?? 0) == 190 << 20 && (brew.first { $0.id == "brew:mysql" }?.bytes ?? 0) == 402 << 20, "estimates count the whole tree")
+    check(brew.first { $0.id == "brew:mysql" }?.action == .stopService(formula: "mysql", pid: 8300, start: Fixtures.now.addingTimeInterval(-29_000)), "the stop names the formula and the job root")
+    check(!brew.contains { $0.id == "know:brew" } && !knows(brew, "know:brew:"), "managed services are never explained a second time")
+    func pg(_ f: [Finding]) -> (row: Bool, know: Bool) { (acts(f).contains("brew:postgresql@16"), knows(f, "know:brew:postgresql@16")) }
+    let pgConnected = ids(Fixtures.brewServices) { _, s in s.established = [8310: 1] }
+    check(pg(pgConnected) == (false, true), "a service something is connected to is explained, not stopped")
+    let pgClient = ids(Fixtures.brewServices) { _, s in s.procs.append(Fixtures.proc(8312, 8302, "postgres", path: "/opt/homebrew/opt/postgresql@16/bin/postgres", ago: 120, mb: 20)) }
+    check(pg(pgClient) == (false, true), "a fresh child is a client on a unix socket: explained, not stopped")
+    let pgBusy = ids(Fixtures.brewServices) { _, s in s.procs = s.procs.map { $0.pid == 8302 ? Fixtures.proc(8302, 1, "postgres", path: $0.path, ago: 29_000, cpu: 0.3, mb: 150) : $0 } }
+    check(pg(pgBusy) == (false, true), "a busy service is explained, not stopped")
+    let pgYoung = ids(Fixtures.brewServices) { _, s in s.procs = s.procs.map { $0.pid == 8302 ? Fixtures.proc(8302, 1, "postgres", path: $0.path, ago: 240, mb: 150) : $0 } }
+    check(pg(pgYoung) == (false, false), "started four minutes ago is too soon")
+    let pgKept = ids(Fixtures.brewServices, keep: ["brew:postgresql@16"])
+    check(pg(pgKept) == (false, false) && acts(pgKept) == ["brew:mysql"], "a kept service is never mentioned, the others stay")
+    let unmanaged = ids(Fixtures.brewServices) { _, s in s.jobs = [:] }
+    check(acts(unmanaged).isEmpty && unmanaged.contains { $0.id == "know:brew" && $0.why.contains("mysqld") && $0.why.contains("postgres") && $0.why.contains("redis-server") },
+          "brew programs started by hand are explained together: \(unmanaged.filter { $0.id == "know:brew" }.map(\.why))")
+
+    print("menu bar apps")
     let bar = ids(Fixtures.menuBarApps)
-    check(acts(bar).isEmpty && bar.contains { $0.id == "know:menubar" && $0.why.contains("Raycast") }, "menu bar apps holding memory are explained")
+    check(acts(bar).isEmpty && bar.contains { $0.id == "know:menubar" && $0.why.contains("Raycast 900 MB") }, "menu bar apps are explained with a size each: \(bar.filter { $0.id == "know:menubar" }.map(\.why))")
     check(!knows(ids(Fixtures.menuBarApps) { _, s in s.procs = s.procs.map { $0.pid == 8201 ? Fixtures.proc(8201, 1, "Raycast", path: $0.path, ago: 20_000, mb: 200) : $0 } }, "know:menubar"), "under a gigabyte and a half is not worth a row")
 
     print("busy programs")
@@ -411,6 +445,18 @@ func runSelfTest() {
     check(!acts(ids(Fixtures.simIdle, disk: Fixtures.diskBusy)).contains("path:/Users/me/Library/Developer/Xcode/DerivedData"), "a cache being written to is not a row")
     check(!acts(ids(Fixtures.simIdle, disk: Fixtures.disk) { _, s in s.procs.append(Fixtures.proc(95_001, 1, "GoneApp", path: "/Users/me/Applications/GoneApp.app/Contents/MacOS/GoneApp", ago: 3000)) }).contains("path:/Users/me/Library/Caches/com.example.goneapp"),
           "a cache whose program is running is not an orphan")
+
+    print("good to know")
+    let heavy = ids(Fixtures.heavy, disk: Fixtures.disk)
+    let knowBuckets = heavy.filter { $0.group == .know }.map { $0.bytes / (100 << 20) }
+    check(knowBuckets == knowBuckets.sorted(by: >), "Good to know reads biggest first: \(knowBuckets)")
+    check(heavy.firstIndex { $0.group == .know }.map { i in heavy[..<i].allSatisfy { $0.group != .know } } == true, "explain-only rows come after the rows with a button")
+    check(acts(heavy).contains("brew:postgresql@16"), "the heavy Mac has a service row: \(acts(heavy))")
+    let tabsLink = heavy.first { $0.id == "know:tabs:com.google.Chrome.beta" }?.link
+    check(tabsLink?.title == "Show Google Chrome Beta" && tabsLink?.url.contains("Google%20Chrome%20Beta.app") == true, "a browser row links to the browser: \(tabsLink?.url ?? "nil")")
+    check(heavy.first { $0.id == "know:cache:/Users/me/.cache/huggingface" }?.link?.url == "/Users/me/.cache/huggingface", "a cache row links to its folder")
+    check(heavy.first { $0.id == "know:trash" } == nil || heavy.first { $0.id == "know:trash" }?.link?.url.hasPrefix("file://") == true, "the Trash row opens the Trash")
+    check(ids(Fixtures.busyProgram).first { $0.id == "know:busy:9000" }?.link?.title == Copy.activityMonitorLink, "a busy program that is not an app links to Activity Monitor")
 
     print("wording")
     check(Format.size(1300 << 20) == "1.3 GB" && Format.size(900 << 20) == "900 MB" && Format.size(22 << 30) == "22 GB" && Format.size(9 << 30) == "9 GB",

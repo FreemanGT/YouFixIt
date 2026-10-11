@@ -146,9 +146,11 @@ struct KnowRow: View {
         .accessibilityElement(children: .combine)
     }
 
+    /// A bare path is shown in Finder, selected and ready to drag to the Trash. A URL is opened: an app bundle comes to
+    /// the front (and this window closes), a settings pane opens.
     private func open(_ link: Finding.Link) {
-        if link.url == "trash" {
-            NSWorkspace.shared.open(URL(fileURLWithPath: NSHomeDirectory() + "/.Trash"))
+        if link.url.hasPrefix("/") {
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: link.url)])
         } else if let url = URL(string: link.url) {
             NSWorkspace.shared.open(url)
         }

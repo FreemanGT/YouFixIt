@@ -7,6 +7,7 @@ enum UndoRecord: Sendable {
     case reopen(URL)
     case boot(udid: String, openGUI: Bool)
     case putBack(from: URL, to: URL)
+    case startService(String)
 }
 
 /// The only code that changes anything on the Mac. Every path re-checks safety first and never escalates.
@@ -24,6 +25,8 @@ enum Actions {
             return (.done, .boot(udid: udid, openGUI: gui))
         case .sigterm(let pid, let start):
             return await terminate(pid: pid, start: start, name: f.name)
+        case .stopService(let formula, let pid, let start):
+            return await stopService(formula: formula, pid: pid, start: start, name: f.name)
         case .trash(let path):
             // A tool may have started filling it since the scan.
             if await DiskScanner.recentlyWritten(path, minutes: 10) { return (.refused(Copy.refusedBusy), nil) }
@@ -63,6 +66,9 @@ enum Actions {
             } catch {
                 return false
             }
+        case .startService(let formula):
+            guard let brew else { return false }
+            return await Shell.run(brew, ["services", "start", formula], timeout: 60, env: brewEnv)?.status == 0
         }
     }
 
@@ -89,17 +95,45 @@ enum Actions {
         return (windowsAfter > windowsBefore ? .askedToSave : .stillRunning, nil)
     }
 
-    /// SIGTERM to a process we proved is an orphan of ours, re-checked right now against pid reuse. No SIGKILL, ever.
-    private static func terminate(pid: pid_t, start: Date, name: String) async -> (Outcome, UndoRecord?) {
+    /// Is this still the process the finding was made for? nil when it is gone, false when the pid now belongs to something else.
+    private static func ours(pid: pid_t, start: Date) -> Bool? {
         var bsd = proc_bsdinfo()
-        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 else { return (.done, nil) }
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 else { return nil }
         let started = TimeInterval(bsd.pbi_start_tvsec) + TimeInterval(bsd.pbi_start_tvusec) / 1_000_000
-        guard abs(started - start.timeIntervalSince1970) < 1, bsd.pbi_uid == Sampler.me else { return (.refused(Copy.refusedSystem), nil) }
-        guard kill(pid, SIGTERM) == 0 else { return (.failed(Copy.couldNotClose(name)), nil) }
+        return abs(started - start.timeIntervalSince1970) < 1 && bsd.pbi_uid == Sampler.me
+    }
+
+    /// Waits up to five seconds for the process to go away.
+    private static func gone(_ pid: pid_t) async -> Bool {
         for _ in 0..<20 {
             try? await Task.sleep(for: .milliseconds(250))
-            if kill(pid, 0) != 0 { return (.done, nil) }
+            if kill(pid, 0) != 0 { return true }
         }
-        return (.stillRunning, nil)
+        return false
+    }
+
+    /// SIGTERM to a process we proved is an orphan of ours, re-checked right now against pid reuse. No SIGKILL, ever.
+    private static func terminate(pid: pid_t, start: Date, name: String) async -> (Outcome, UndoRecord?) {
+        guard let same = ours(pid: pid, start: start) else { return (.done, nil) }
+        guard same else { return (.refused(Copy.refusedSystem), nil) }
+        guard kill(pid, SIGTERM) == 0 else { return (.failed(Copy.couldNotClose(name)), nil) }
+        return (await gone(pid) ? .done : .stillRunning, nil)
+    }
+
+    static let brew = ["/opt/homebrew/bin/brew", "/usr/local/bin/brew"].first { FileManager.default.isExecutableFile(atPath: $0) }
+    /// No network, no analytics, no hints: brew does only what it is asked.
+    static let brewEnv = ["HOMEBREW_NO_AUTO_UPDATE": "1", "HOMEBREW_NO_ANALYTICS": "1", "HOMEBREW_NO_ENV_HINTS": "1"]
+
+    /// brew services stop: launchd boots the job out (a SIGTERM an idle service answers well inside its 5 s grace) and the
+    /// service leaves the login list. Re-checked right now: same process, and still nothing connected anywhere in its tree.
+    private static func stopService(formula: String, pid: pid_t, start: Date, name: String) async -> (Outcome, UndoRecord?) {
+        guard let same = ours(pid: pid, start: start) else { return (.done, nil) }
+        guard same else { return (.refused(Copy.refusedSystem), nil) }
+        if Sampler.treePids(pid).contains(where: { Sampler.sockets($0).established > 0 }) { return (.refused(Copy.refusedConnected), nil) }
+        guard let brew, let r = await Shell.run(brew, ["services", "stop", formula], timeout: 90, env: brewEnv), r.status == 0 else {
+            return (.failed(Copy.couldNotClose(name)), nil)
+        }
+        // brew reports success even when it could not stop the job, so the process going away is the proof.
+        return await gone(pid) ? (.done, .startService(formula)) : (.stillRunning, nil)
     }
 }

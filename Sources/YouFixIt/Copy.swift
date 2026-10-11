@@ -46,6 +46,7 @@ enum Copy {
     static func whyInstaller(_ bytes: UInt64) -> String { "An installer you already used" }
     static let whyUnavailableSims = "Their iOS version is gone"
     static let whyIdleVM = "No containers running, nothing using it"
+    static let whyServiceIdle = "Nothing is using it. Stays off until you start it again."
     static func estimate(_ bytes: UInt64) -> String { "about \(Format.size(bytes))" }
     static let keep = "Keep"
     static func keepTip(_ name: String) -> String { "Never suggest \(name)" }
@@ -56,6 +57,7 @@ enum Copy {
     static let putBack = "Put back"
     static let bootAgain = "Boot again"
     static let reopen = "Reopen"
+    static let startAgain = "Start again"
 
     // Primary button.
     static let tidyUp = "Tidy up"
@@ -80,6 +82,7 @@ enum Copy {
     static let refusedAudio = "It's playing audio, so it stays."
     static let refusedKept = "On your Always keep list."
     static let refusedBusy = "It's busy with something, so it stays."
+    static let refusedConnected = "Something is connected to it, so it stays."
     static let restartServer = "Start it again from the project folder when you need it"
 
     // Good to know.
@@ -91,9 +94,16 @@ enum Copy {
     static func tabs(_ browser: String, _ n: Int, _ bytes: UInt64) -> String {
         "\(browser) has about \(n) tabs open (\(Format.size(bytes))). Closing the ones you're done with helps. Tabs are never closed for you."
     }
-    static func claude(_ n: Int, _ bytes: UInt64) -> String {
-        "\(n) Claude coding sessions are open (\(Format.size(bytes))). Closing finished ones in Claude's sidebar frees memory."
+    /// `quiet` names up to three project folders whose sessions have gone quiet; `more` says the list was cut.
+    static func claude(_ n: Int, _ bytes: UInt64, quiet: [String], more: Bool) -> String {
+        guard !quiet.isEmpty else { return "\(n) Claude coding sessions are open (\(Format.size(bytes))). Closing finished ones in Claude's sidebar frees memory." }
+        return "\(n) Claude sessions are open (\(Format.size(bytes))). Quiet ones: \(quiet.joined(separator: ", "))\(more ? " and more" : ""). Close finished ones from the sidebar."
     }
+    static func showApp(_ name: String) -> String { "Show \(name)" }
+    static let showFolder = "Show in Finder"
+    static let activityMonitorLink = "Open Activity Monitor"
+    static let serviceConnected = "Running from Homebrew. Something is connected to it, so it stays."
+    static let serviceBusy = "Running from Homebrew. It's busy, so it stays."
     static let memorySqueeze = "Memory is nearly full, so your Mac is juggling. Letting go of the things above helps right away."
     static let backlog = "Lots of programs are waiting their turn. Closing idle ones clears the queue."
     static let drawing = "Drawing all those windows is hard work. Fewer open windows means a smoother Mac."
@@ -109,10 +119,11 @@ enum Copy {
     static func oldDevice(_ name: String, _ bytes: UInt64) -> String { "The test iPhone \(name) hasn't been used in months (\(Format.size(bytes))). Remove it in Xcode's Devices window." }
     static func vmApp(_ name: String, _ bytes: UInt64) -> String { "\(name) is holding \(Format.size(bytes)) for a virtual machine. Shut the machine down inside \(name) when you're done." }
     static func brewServices(_ names: [String], _ bytes: UInt64) -> String {
-        "\(names.joined(separator: ", ")) are running from Homebrew (\(Format.size(bytes))). They start at login; brew services stop NAME turns one off."
+        "Started at login by Homebrew: \(names.joined(separator: ", ")) (\(Format.size(bytes))). brew services stop NAME turns one off."
     }
-    static func menuBarApps(_ top: [String], _ bytes: UInt64) -> String {
-        "Menu bar apps are holding \(Format.size(bytes)): \(top.joined(separator: ", ")). Quit the ones you don't use from their own menu bar icons."
+    static func menuBarApps(_ top: [(String, UInt64)], _ bytes: UInt64) -> String {
+        let named = top.map { "\($0.0) \(Format.size($0.1))" }.joined(separator: ", ")
+        return "Menu bar apps hold \(Format.size(bytes)): \(named). Quit the ones you don't use from their own icons."
     }
     static func busyProgram(_ name: String) -> String { "\(name) has been working hard for a few minutes. If you're not waiting on it, quitting it gives the Mac a breather." }
     static func leftoverWatcher(_ bytes: UInt64) -> String { "Left over from a coding session, holding \(Format.size(bytes)). It isn't serving anything; quit it from Terminal if it isn't yours." }

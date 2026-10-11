@@ -43,8 +43,9 @@ struct Sample: Sendable {
     let children: [pid_t: [pid_t]]
     let apps: [App]
     let sims: [Sim]
-    let managedPids: Set<pid_t>     // launchd-managed jobs (only gathered when orphan candidates exist)
+    let jobs: [pid_t: String]       // launchd jobs by pid, with their label (only gathered when orphan or Homebrew candidates exist)
     let args: [pid_t: [String]]     // only for candidate pids (our user, parent pid 1)
+    let cwd: [pid_t: String]        // working directory, only for Claude coding sessions
     let listening: Set<pid_t>       // candidate pids with a listening TCP socket
     let established: [pid_t: Int]   // candidate pids with open TCP connections, and how many
     let containersIdle: [String: Bool]  // VM app bundle id: true when its Docker socket reports no containers
@@ -122,11 +123,12 @@ struct Finding: Identifiable, Sendable, Equatable {
         case shutdownSim(udid: String)
         case quitApp(pid: pid_t, bundleID: String, url: URL?)
         case sigterm(pid: pid_t, start: Date)
+        case stopService(formula: String, pid: pid_t, start: Date)
         case trash(path: String)
         case deleteUnavailableSims
     }
 
-    let id: String                  // stable across scans: "sim:UDID", "app:bundle", "vm:bundle", "orphan:pid:start", "path:/…", "know:kind"
+    let id: String                  // stable across scans: "sim:UDID", "app:bundle", "vm:bundle", "orphan:pid:start", "brew:formula", "path:/…", "know:kind"
     let keepKey: String             // what "Keep" remembers: a bundle id, an executable path, a folder, a device UDID
     let group: Group
     let name: String                // "Saves Store 6.9", "FreeFlow", "Xcode build cache"
@@ -134,7 +136,7 @@ struct Finding: Identifiable, Sendable, Equatable {
     let bytes: UInt64               // memory it holds, or disk it takes
     let action: Action?             // nil = explain only
     let undoLabel: String?          // "Boot again", "Reopen", "Put back"
-    let link: Link?                 // for explain-only rows: where to go
+    let link: Link?                 // for explain-only rows: where to go (a URL is opened, a bare path is shown in Finder)
     let iconPath: String?           // app bundle path for the icon; nil = SF Symbol by group
     let symbol: String              // SF Symbol name when there is no app icon
 

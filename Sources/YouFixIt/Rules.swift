@@ -19,7 +19,20 @@ enum Rules {
     static let vmActionable: Set<String> = ["com.docker.docker", "dev.kdrag0n.MacVirt"]
     /// Virtual machine apps that are only explained: a guest may hold unsaved state.
     static let vmExplain: Set<String> = ["com.parallels.desktop.console", "com.vmware.fusion", "com.utmapp.UTM", "org.virtualbox.app.VirtualBox"]
-    static let brewPrefixes = ["/opt/homebrew/", "/usr/local/Cellar/", "/usr/local/opt/"]
+    /// A link that brings a running app to the front (LaunchServices activates it; our own window closes).
+    static func show(_ app: Sample.App) -> Finding.Link? {
+        app.url.map { Finding.Link(title: Copy.showApp(app.name), url: $0.absoluteString) }
+    }
+    static let activityMonitor = Finding.Link(title: Copy.activityMonitorLink,
+                                              url: URL(fileURLWithPath: "/System/Applications/Utilities/Activity Monitor.app").absoluteString)
+
+    /// The formula of a Homebrew service: a launchd job with a Homebrew label whose tree runs a Homebrew binary (mysql's
+    /// job root is its mysqld_safe shell wrapper; the server is the child).
+    static func service(_ root: Sample.Proc, in s: Sample) -> String? {
+        guard let label = s.jobs[root.pid], let prefix = Sampler.brewLabels.first(where: { label.hasPrefix($0) }),
+              s.tree(root.pid).contains(where: { p in Sampler.brewPrefixes.contains(where: { p.path.hasPrefix($0) }) }) else { return nil }
+        return String(label.dropFirst(prefix.count))
+    }
 
     static func findings(history: [Sample], disk: DiskScan?, keep: Set<String>, tuning: Tuning) -> [Finding] {
         guard let s = history.last else { return [] }
@@ -27,11 +40,18 @@ enum Rules {
         out += idleSimulators(s, history, tuning)
         out += idleApps(s, history, keep: keep, tuning)
         out += idleVMs(s, history, keep: keep, tuning)
+        out += services(s, history, tuning)
         out += devServers(s, history, tuning)
         out += testBrowsers(s, history, tuning)
         if let disk { out += space(disk, s, tuning) }
         out += insights(s, history, tuning)
-        return out.filter { !keep.contains($0.keepKey) }
+        let kept = out.filter { !keep.contains($0.keepKey) }
+        // Good to know reads biggest first. 100 MB buckets keep rows from swapping places as memory wobbles between samples.
+        let know = kept.filter { $0.group == .know }.sorted { a, b in
+            let (x, y) = (a.bytes / (100 << 20), b.bytes / (100 << 20))
+            return x != y ? x > y : a.id < b.id
+        }
+        return kept.filter { $0.group != .know } + know
     }
 
     // MARK: - Windows over the history
@@ -145,10 +165,37 @@ enum Rules {
         }
     }
 
+    /// R6: a Homebrew service launchd keeps alive since login, quiet and with nothing connected to it. Stopped through
+    /// brew services, the one stop launchd does not undo on the spot (every Homebrew job has KeepAlive); Undo starts it again.
+    /// launchd sends SIGTERM, SIGKILLs only a job that ignores it for 5 s, and SIGTERMs the rest of its process group:
+    /// mysql behind its signal-ignoring mysqld_safe wrapper logged a clean shutdown this way (checked 2026-10-11).
+    static func services(_ s: Sample, _ h: [Sample], _ t: Tuning) -> [Finding] {
+        guard spans(h, t.idle) else { return [] }
+        return s.procs.values.sorted { $0.pid < $1.pid }.compactMap { root in
+            guard root.uid == Sampler.me, let formula = service(root, in: s), s.at.timeIntervalSince(root.start) >= t.idle else { return nil }
+            let bytes = s.footprint(of: root.pid)
+            guard bytes >= 150 << 20 else { return nil }
+            let tree = s.tree(root.pid)
+            // ponytail: TCP connections only. A unix-socket client is invisible, but postgres forks a child per client, so a
+            // child younger than the idle window counts as one; an idle unix client older than that is the known ceiling.
+            let connected = tree.contains { (s.established[$0.pid] ?? 0) > 0 }
+                || tree.contains { $0.pid != root.pid && s.at.timeIntervalSince($0.start) < t.idle }
+            let busy = avgCPU(root.pid, h, t.idle) >= 0.05 || maxCPU(root.pid, h, 60) >= 0.5 || ioRate(root.pid, h, t.idle) >= t.busyIO
+            if connected || busy {
+                return Finding(id: "know:brew:\(formula)", keepKey: "brew:\(formula)", group: .know, name: formula,
+                               why: connected ? Copy.serviceConnected : Copy.serviceBusy, bytes: bytes, action: nil, undoLabel: nil,
+                               link: nil, iconPath: nil, symbol: "server.rack")
+            }
+            return Finding(id: "brew:\(formula)", keepKey: "brew:\(formula)", group: .running, name: formula, why: Copy.whyServiceIdle, bytes: bytes,
+                           action: .stopService(formula: formula, pid: root.pid, start: root.start), undoLabel: Copy.startAgain,
+                           link: nil, iconPath: nil, symbol: "server.rack")
+        }
+    }
+
     /// Our own processes that launchd adopted: parent pid 1, not an app, not a launchd job, not inside a bundle.
     static func orphans(_ s: Sample) -> [Sample.Proc] {
         s.procs.values.filter { p in
-            p.uid == Sampler.me && p.ppid == 1 && s.app(p.pid) == nil && !s.managedPids.contains(p.pid)
+            p.uid == Sampler.me && p.ppid == 1 && s.app(p.pid) == nil && s.jobs[p.pid] == nil
                 && !Safety.neverPaths.contains(where: { p.path.hasPrefix($0) }) && !p.path.contains(".app/")
         }
     }
@@ -169,11 +216,15 @@ enum Rules {
         }
     }
 
-    /// "node …/.bin/expo start --port 8081" reads as "expo start".
+    /// "node …/.bin/expo start --port 8081" reads as "expo start"; "node --liftoff-only …/codegraph.js" as "codegraph.js".
     static func command(_ args: [String]?, fallback: String) -> String {
-        guard let args, args.count > 1 else { return fallback }
-        let script = (args[1] as NSString).lastPathComponent
-        let verb = args.dropFirst(2).first.flatMap { $0.hasPrefix("-") ? nil : $0 }
+        guard let args else { return fallback }
+        let rest = args.dropFirst()
+        // ponytail: the script is the first path-like argument, else the first that is not a flag; an option's bare value can still win.
+        guard let i = rest.firstIndex(where: { !$0.hasPrefix("-") && ($0.contains("/") || $0.contains(".")) })
+                ?? rest.firstIndex(where: { !$0.hasPrefix("-") }) else { return fallback }
+        let script = (args[i] as NSString).lastPathComponent
+        let verb = args.dropFirst(i + 1).first.flatMap { $0.hasPrefix("-") ? nil : $0 }
         return [script, verb].compactMap { $0 }.joined(separator: " ")
     }
 
@@ -224,14 +275,14 @@ enum Rules {
             case .previews: if !xcodeBusy, !item.busy { row(item, Copy.whyDerivedData(item.bytes), "eye") }
             case .simCache: if !simBooted, !item.busy { row(item, Copy.whyDevCache, "iphone") }
             case .devCache: if !item.busy { row(item, Copy.whyDevCache, "shippingbox") }
-            case .otherCache: know("cache:\(item.path)", item, Copy.otherCache(item.bytes), "shippingbox")
+            case .otherCache: know("cache:\(item.path)", item, Copy.otherCache(item.bytes), "shippingbox", link: Finding.Link(title: Copy.showFolder, url: item.path))
             case .orphanCache:
                 // A folder named after an app nothing runs from, and nothing wrote into for a month.
                 let tail = item.name.components(separatedBy: ".").last ?? item.name
                 let alive = tail.count >= 5 && s.procs.values.contains { ($0.path as NSString).lastPathComponent.range(of: tail, options: .caseInsensitive) != nil }
                 if !item.busy, !alive { row(item, Copy.whyOrphanCache, "archivebox") }
             case .installer: row(item, Copy.whyInstaller(item.bytes), "arrow.down.circle")
-            case .trash: know("trash", item, Copy.trashSize(item.bytes), "trash", link: Finding.Link(title: Copy.trashLink, url: "trash"))
+            case .trash: know("trash", item, Copy.trashSize(item.bytes), "trash", link: Finding.Link(title: Copy.trashLink, url: URL(fileURLWithPath: item.path).absoluteString))
             case .runtime: know("runtime:\(item.path)", item, Copy.oldRuntime(item.name, item.bytes), "iphone")
             case .oldDevice: know("device:\(item.path)", item, Copy.oldDevice(item.name, item.bytes), "iphone")
             }
@@ -272,32 +323,37 @@ enum Rules {
             } else { continue }
             let bytes = renderers.reduce(0) { $0 + $1.footprint }
             if renderers.count >= 25 || bytes >= 3 << 30 {
-                know("tabs:\(app.bundleID)", app.name, Copy.tabs(app.name, renderers.count, bytes), "safari", bytes: bytes)
+                know("tabs:\(app.bundleID)", app.name, Copy.tabs(app.name, renderers.count, bytes), "safari", link: show(app), bytes: bytes)
             }
         }
 
-        let sessions = s.procs.values.filter { $0.path.hasSuffix("/claude.app/Contents/MacOS/claude") }
+        let sessions = s.procs.values.filter { $0.path.hasSuffix(Sampler.claudeSession) }
         let sessionBytes = sessions.reduce(0) { $0 + $1.footprint }
         if sessions.count >= 4 || sessionBytes >= 2 << 30 {
-            know("claude", "Claude", Copy.claude(sessions.count, sessionBytes), "bubble.left.and.text.bubble.right", bytes: sessionBytes)
+            // Which ones have gone quiet, by project folder, so the user knows what to close in Claude's sidebar.
+            let quiet = sessions.filter { s.at.timeIntervalSince($0.start) >= t.idle && avgCPU($0.pid, h, t.idle) < 0.01 }
+            let folders = Set(quiet.compactMap { s.cwd[$0.pid].map { ($0 as NSString).lastPathComponent } }).sorted()
+            know("claude", "Claude", Copy.claude(sessions.count, sessionBytes, quiet: Array(folders.prefix(3)), more: folders.count > 3),
+                 "bubble.left.and.text.bubble.right", link: s.app(bundle: "com.anthropic.claudefordesktop").flatMap(show), bytes: sessionBytes)
         }
 
         // G13: virtual machines that only get explained.
         for app in s.apps where vmExplain.contains(app.bundleID) {
             let bytes = s.footprint(of: app.pid)
-            if bytes >= 1 << 30 { know("vm:\(app.bundleID)", app.name, Copy.vmApp(app.name, bytes), "desktopcomputer", bytes: bytes) }
+            if bytes >= 1 << 30 { know("vm:\(app.bundleID)", app.name, Copy.vmApp(app.name, bytes), "desktopcomputer", link: show(app), bytes: bytes) }
         }
 
-        // G14: Homebrew services. launchd started them, no app owns them, and they are not a dev server someone left behind.
-        let services = s.procs.values.filter { p in
-            p.uid == Sampler.me && brewPrefixes.contains(where: { p.path.hasPrefix($0) }) && !Sampler.serverNames.contains(p.name)
-                && (s.root(of: p.pid).map { $0.ppid == 1 && s.app($0.pid) == nil } ?? false)
+        // G14: Homebrew programs that are not services: brew binaries started by hand that launchd adopted, no app owns,
+        // and that are not a dev server someone left behind.
+        let brewProcs = s.procs.values.filter { p in
+            p.uid == Sampler.me && Sampler.brewPrefixes.contains(where: { p.path.hasPrefix($0) }) && !Sampler.serverNames.contains(p.name)
+                && (s.root(of: p.pid).map { $0.ppid == 1 && s.app($0.pid) == nil && service($0, in: s) == nil } ?? false)
         }
-        if !services.isEmpty {
-            let roots = Set(services.compactMap { s.root(of: $0.pid)?.pid })
+        if !brewProcs.isEmpty {
+            let roots = Set(brewProcs.compactMap { s.root(of: $0.pid)?.pid })
             let bytes = roots.reduce(0) { $0 + s.footprint(of: $1) }
             if bytes >= 200 << 20 {
-                know("brew", "Homebrew services", Copy.brewServices(Array(Set(services.map(\.name))).sorted(), bytes), "server.rack", bytes: bytes)
+                know("brew", "Homebrew services", Copy.brewServices(Array(Set(brewProcs.map(\.name))).sorted(), bytes), "server.rack", bytes: bytes)
             }
         }
 
@@ -308,7 +364,7 @@ enum Rules {
         }.map { ($0.name, s.footprint(of: $0.pid)) }.sorted { $0.1 > $1.1 }
         let barBytes = bar.reduce(0) { $0 + $1.1 }
         if barBytes >= 1536 << 20 {
-            know("menubar", "Menu bar apps", Copy.menuBarApps(bar.prefix(3).map(\.0), barBytes), "menubar.rectangle", bytes: barBytes)
+            know("menubar", "Menu bar apps", Copy.menuBarApps(Array(bar.prefix(3)), barBytes), "menubar.rectangle", bytes: barBytes)
         }
 
         // G16: the busiest thing in the background, once it has been at it for a while. The app in front is expected to work.
@@ -321,7 +377,7 @@ enum Rules {
            let busiest = roots.map({ ($0, avgCPU($0.pid, h, t.sustain)) }).max(by: { $0.1 < $1.1 }), busiest.1 >= 0.5 {
             let p = busiest.0
             let name = s.app(p.pid)?.name ?? command(s.args[p.pid], fallback: p.name)
-            know("busy:\(p.pid)", name, Copy.busyProgram(name), "gauge.with.needle", bytes: s.footprint(of: p.pid))
+            know("busy:\(p.pid)", name, Copy.busyProgram(name), "gauge.with.needle", link: s.app(p.pid).flatMap(show) ?? activityMonitor, bytes: s.footprint(of: p.pid))
         }
 
         if held(h, 60, { $0.pressure >= 2 }) || s.compressed >= s.memTotal / 4 || s.swapUsed >= 2 << 30 {
@@ -347,7 +403,7 @@ enum Rules {
         for p in orphans(s) where otherLeftovers.contains(p.name) {
             let bytes = s.footprint(of: p.pid)
             guard bytes >= 150 << 20, s.at.timeIntervalSince(p.start) >= 900 else { continue }
-            know("leftover:\(p.pid)", command(s.args[p.pid], fallback: p.name), Copy.otherLeftover(p.name, bytes), "terminal", bytes: bytes)
+            know("leftover:\(p.pid)", command(s.args[p.pid], fallback: p.name), Copy.otherLeftover(p.name, bytes), "terminal", link: activityMonitor, bytes: bytes)
         }
         // G17: node leftovers R3 will not touch: watchers with no listener, and servers something is still connected to.
         for p in orphans(s) where devServers.contains(p.name) {
@@ -357,9 +413,9 @@ enum Rules {
             let listens = tree.contains { s.listening.contains($0.pid) }
             let connected = tree.contains { (s.established[$0.pid] ?? 0) > 0 }
             if !listens {
-                know("leftover-watcher:\(p.pid)", command(s.args[p.pid], fallback: p.name), Copy.leftoverWatcher(bytes), "terminal", bytes: bytes)
+                know("leftover-watcher:\(p.pid)", command(s.args[p.pid], fallback: p.name), Copy.leftoverWatcher(bytes), "terminal", link: activityMonitor, bytes: bytes)
             } else if connected {
-                know("leftover-server:\(p.pid)", command(s.args[p.pid], fallback: p.name), Copy.connectedServer, "terminal", bytes: bytes)
+                know("leftover-server:\(p.pid)", command(s.args[p.pid], fallback: p.name), Copy.connectedServer, "terminal", link: activityMonitor, bytes: bytes)
             }
         }
         for p in s.procs.values where p.uid == Sampler.me && p.ppid != 1 && Sampler.browserNames.contains(p.name) {

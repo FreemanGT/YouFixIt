@@ -11,11 +11,17 @@ actor Sampler {
     private var pathCache: [pid_t: (start: TimeInterval, path: String)] = [:]
     private var simCache: (at: Date, sims: [Sample.Sim])?
     private var vmCache: [String: (at: Date, idle: Bool)] = [:]
+    private var jobsCache: (at: Date, jobs: [pid_t: String])?
 
     static let me = getuid()
     /// Names whose orphans may be dev servers (R3) or other leftovers (G12).
     static let serverNames: Set<String> = ["node", "bun", "deno", "python", "python3", "ruby", "java", "php"]
     static let browserNames: Set<String> = ["Google Chrome", "Google Chrome Beta", "Google Chrome Canary", "Chromium", "Brave Browser", "Microsoft Edge", "chrome-headless-shell"]
+    static let brewPrefixes = ["/opt/homebrew/", "/usr/local/Cellar/", "/usr/local/opt/"]
+    /// launchd label prefixes of a Homebrew service (the older and the current naming); the rest is the formula name.
+    static let brewLabels = ["homebrew.mxcl.", "sh.brew."]
+    /// A Claude coding session started by the Claude desktop app.
+    static let claudeSession = "/claude.app/Contents/MacOS/claude"
     /// Virtual machine apps and the Docker socket that says whether anything runs inside.
     static let vmSockets: [String: String] = [
         "com.docker.docker": NSHomeDirectory() + "/.docker/run/docker.sock",
@@ -70,30 +76,48 @@ actor Sampler {
         }
         let appPids = Set(seeds.map(\.pid))
 
-        // 3. Arguments and sockets, only for our own parent-pid-1 processes (orphans, launchd_sim, headless browsers).
+        // 3. Arguments and sockets, only for our own parent-pid-1 processes (orphans, launchd_sim, headless browsers)
+        //    and Homebrew services; the working directory of Claude coding sessions.
         var args: [pid_t: [String]] = [:]
+        var cwd: [pid_t: String] = [:]
         var listening = Set<pid_t>()
         var established: [pid_t: Int] = [:]
         var orphanCandidates = false
+        var brewCandidates = false
+        func sockets(under root: pid_t, where test: (Sample.Proc) -> Bool) {
+            // The listener is often a child (npm exec → node), so look through the whole tree.
+            var queue = [root]
+            while let pid = queue.popLast() {
+                if let q = procs[pid], test(q) {
+                    let sock = Self.sockets(pid)
+                    if sock.listening { listening.insert(pid) }
+                    if sock.established > 0 { established[pid] = sock.established }
+                }
+                queue.append(contentsOf: children[pid] ?? [])
+            }
+        }
         for p in procs.values where p.uid == Self.me {
+            if p.path.hasSuffix(Self.claudeSession), let dir = Self.cwd(p.pid) { cwd[p.pid] = dir }
+            if Self.brewPrefixes.contains(where: { p.path.hasPrefix($0) }) { brewCandidates = true }
             let browser = Self.browserNames.contains(p.name)
             guard p.ppid == 1 || browser else { continue }
             if p.name == "launchd_sim" || Self.serverNames.contains(p.name) || browser { args[p.pid] = Self.args(p.pid) }
             if p.ppid == 1, Self.serverNames.contains(p.name), !appPids.contains(p.pid) {
                 orphanCandidates = true
-                // The listener is often a child (npm exec → node), so look through the whole tree.
-                var queue = [p.pid]
-                while let pid = queue.popLast() {
-                    if let q = procs[pid], Self.serverNames.contains(q.name) {
-                        let sock = Self.sockets(pid)
-                        if sock.listening { listening.insert(pid) }
-                        if sock.established > 0 { established[pid] = sock.established }
-                    }
-                    queue.append(contentsOf: children[pid] ?? [])
-                }
+                sockets(under: p.pid) { Self.serverNames.contains($0.name) }
             }
             if p.ppid == 1, browser { orphanCandidates = true }
         }
+        var jobs: [pid_t: String] = [:]
+        if orphanCandidates || brewCandidates {
+            if let cached = jobsCache, now.timeIntervalSince(cached.at) < 60 {
+                jobs = cached.jobs
+            } else {
+                jobs = await Self.jobs()
+                jobsCache = (now, jobs)
+            }
+        }
+        for (root, label) in jobs where Self.brewLabels.contains(where: { label.hasPrefix($0) }) { sockets(under: root) { _ in true } }
 
         // 4. Simulators, only when a device is actually booted (simctl itself would start CoreSimulatorService).
         var sims: [Sample.Sim] = []
@@ -108,9 +132,6 @@ actor Sampler {
         } else {
             simCache = nil
         }
-        var managed = Set<pid_t>()
-        if orphanCandidates { managed = await Self.managedPids() }
-
         // 5. Virtual machine apps: ask their Docker socket whether anything runs inside, once a minute.
         var containersIdle: [String: Bool] = [:]
         for seed in seeds {
@@ -133,7 +154,7 @@ actor Sampler {
         let front = procs[frontmost]
         let fullscreen = front.map { win.fullscreen.contains($0.pid) } ?? false
 
-        return Sample(at: now, procs: procs, children: children, apps: apps, sims: sims, managedPids: managed, args: args,
+        return Sample(at: now, procs: procs, children: children, apps: apps, sims: sims, jobs: jobs, args: args, cwd: cwd,
                       listening: listening, established: established, containersIdle: containersIdle, frontmost: frontmost,
                       fullscreen: fullscreen, cpuBusy: cpuBusy, load1: load[0],
                       cores: ProcessInfo.processInfo.activeProcessorCount, memUsed: mem.used,
@@ -166,6 +187,33 @@ actor Sampler {
         withUnsafePointer(to: &bsd.pbi_name) {
             $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXCOMLEN) * 2 + 1) { String(cString: $0) }
         }
+    }
+
+    /// The current working directory of one of our own processes; nil when unreadable.
+    nonisolated static func cwd(_ pid: pid_t) -> String? {
+        var info = proc_vnodepathinfo()
+        guard proc_pidinfo(pid, PROC_PIDVNODEPATHINFO, 0, &info, Int32(MemoryLayout<proc_vnodepathinfo>.size)) > 0 else { return nil }
+        let path = withUnsafePointer(to: &info.pvi_cdir.vip_path) {
+            $0.withMemoryRebound(to: CChar.self, capacity: Int(MAXPATHLEN)) { String(cString: $0) }
+        }
+        return path.isEmpty ? nil : path
+    }
+
+    /// A process and all its descendants, read right now (for an apply-time re-check, when the sample may be stale).
+    nonisolated static func treePids(_ root: pid_t) -> [pid_t] {
+        var children: [pid_t: [pid_t]] = [:]
+        for pid in pids() {
+            var bsd = proc_bsdinfo()
+            guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 else { continue }
+            children[pid_t(bsd.pbi_ppid), default: []].append(pid)
+        }
+        var out: [pid_t] = []
+        var queue = [root]
+        while let pid = queue.popLast() {
+            out.append(pid)
+            queue.append(contentsOf: children[pid] ?? [])
+        }
+        return out
     }
 
     /// Real memory footprint and lifetime disk traffic; only answers for our own processes.
@@ -367,13 +415,15 @@ actor Sampler {
         return sims.sorted { $0.name < $1.name }
     }
 
-    nonisolated static func managedPids() async -> Set<pid_t> {
-        guard let out = await Shell.run("/bin/launchctl", ["list"], timeout: 10), out.status == 0 else { return [] }
-        var pids = Set<pid_t>()
+    /// Our launchd jobs that are running right now: pid to label. Rows are "PID\tStatus\tLabel".
+    nonisolated static func jobs() async -> [pid_t: String] {
+        guard let out = await Shell.run("/bin/launchctl", ["list"], timeout: 10), out.status == 0 else { return [:] }
+        var jobs: [pid_t: String] = [:]
         for line in out.out.split(separator: "\n").dropFirst() {
-            if let first = line.split(separator: "\t").first, let pid = pid_t(first) { pids.insert(pid) }
+            let cols = line.split(separator: "\t")
+            if cols.count == 3, let pid = pid_t(cols[0]) { jobs[pid] = String(cols[2]) }
         }
-        return pids
+        return jobs
     }
 }
 
@@ -388,11 +438,12 @@ enum Shell {
         let process = Process()
     }
 
-    static func run(_ path: String, _ args: [String], timeout: TimeInterval) async -> Result? {
+    static func run(_ path: String, _ args: [String], timeout: TimeInterval, env: [String: String] = [:]) async -> Result? {
         let box = Box()
         let process = box.process
         process.executableURL = URL(fileURLWithPath: path)
         process.arguments = args
+        if !env.isEmpty { process.environment = ProcessInfo.processInfo.environment.merging(env) { $1 } }
         let pipe = Pipe()
         process.standardOutput = pipe
         process.standardError = FileHandle.nullDevice
