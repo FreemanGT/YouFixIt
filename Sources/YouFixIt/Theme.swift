@@ -11,6 +11,9 @@ enum Theme {
     static let amber = Color(light: NSColor(srgbRed: 0.851, green: 0.604, blue: 0.169, alpha: 1),
                              dark: NSColor(srgbRed: 0.941, green: 0.706, blue: 0.271, alpha: 1))
     static let separator = Color(nsColor: .separatorColor)
+    /// The panel's own backdrop, opaque on purpose: the menu bar window is glass on macOS 26 and later, and over a bright
+    /// window the text was unreadable. The same colour the snapshots render on.
+    static let window = Color(nsColor: .windowBackgroundColor)
     static let hover = Color.primary.opacity(0.05)
     /// Cards sit one step above the window: a soft fill in both appearances, never a border.
     static let card = Color(light: NSColor.black.withAlphaComponent(0.055), dark: NSColor.white.withAlphaComponent(0.085))

@@ -19,6 +19,7 @@ struct PopoverView: View {
             }
         }
         .frame(width: Theme.popoverWidth)
+        .background(Theme.window)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
         .background(WindowFit(size: size))
         .tint(Theme.tint)

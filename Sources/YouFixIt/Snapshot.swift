@@ -58,14 +58,13 @@ enum Snapshot {
 
     private static func render(_ scene: Scene, engine: Engine, appearance: (String, NSAppearance.Name), into dir: URL) -> Bool {
         let view = PopoverView(engine: engine, pane: scene.pane, knowOpen: scene.knowOpen)
-            .background(Color(nsColor: .windowBackgroundColor))
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.separator, lineWidth: 1))
         return write(AnyView(view), name: "\(scene.name)-\(appearance.0)", appearance: appearance.1, into: dir)
     }
 
     private static func renderWelcome(_ appearance: (String, NSAppearance.Name), into dir: URL) -> Bool {
-        let view = WelcomeView(onStart: {}).background(Color(nsColor: .windowBackgroundColor))
+        let view = WelcomeView(onStart: {}).background(Theme.window)
         return write(AnyView(view), name: "welcome-\(appearance.0)", appearance: appearance.1, into: dir)
     }
 
