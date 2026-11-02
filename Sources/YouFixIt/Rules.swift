@@ -176,7 +176,7 @@ enum Rules {
             let bytes = s.footprint(of: root.pid)
             guard bytes >= 150 << 20 else { return nil }
             let tree = s.tree(root.pid)
-            // ponytail: TCP connections only. A unix-socket client is invisible, but postgres forks a child per client, so a
+            // TCP connections only. A unix-socket client is invisible, but postgres forks a child per client, so a
             // child younger than the idle window counts as one; an idle unix client older than that is the known ceiling.
             let connected = tree.contains { (s.established[$0.pid] ?? 0) > 0 }
                 || tree.contains { $0.pid != root.pid && s.at.timeIntervalSince($0.start) < t.idle }
@@ -220,7 +220,7 @@ enum Rules {
     static func command(_ args: [String]?, fallback: String) -> String {
         guard let args else { return fallback }
         let rest = args.dropFirst()
-        // ponytail: the script is the first path-like argument, else the first that is not a flag; an option's bare value can still win.
+        // The script is the first path-like argument, else the first that is not a flag; an option's bare value can still win.
         guard let i = rest.firstIndex(where: { !$0.hasPrefix("-") && ($0.contains("/") || $0.contains(".")) })
                 ?? rest.firstIndex(where: { !$0.hasPrefix("-") }) else { return fallback }
         let script = (args[i] as NSString).lastPathComponent
