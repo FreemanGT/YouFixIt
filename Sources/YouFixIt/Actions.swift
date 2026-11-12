@@ -68,6 +68,7 @@ enum Actions {
                let app = NSRunningApplication.runningApplications(withBundleIdentifier: folder).first {
                 return ActResult(outcome: .refused(Copy.refusedAppOpen(app.localizedName ?? f.name)))
             }
+            if DiskScanner.inUse(path, by: Sampler.usage()) { return ActResult(outcome: .refused(Copy.refusedInUse)) }
             if await DiskScanner.recentlyWritten(path, minutes: 10) { return ActResult(outcome: .refused(Copy.refusedBusy)) }
             return trashOne(path, bytes: f.bytes, name: f.name)
         case .trashAll(let targets):
@@ -97,7 +98,9 @@ enum Actions {
             let r = await Shell.run("/usr/bin/osascript", ["-e", "tell application \"loginwindow\" to «event aevtrrst»"], timeout: 30)
             return ActResult(outcome: r?.status == 0 ? .done : .failed(Copy.restartFailed))
         case .emptyTrash:
-            let r = await Shell.run("/usr/bin/osascript", ["-e", "tell application \"Finder\" to empty trash"], timeout: 1800)
+            // Apple Events give up after two minutes unless told otherwise, and a big Trash takes longer than that.
+            let r = await Shell.run("/usr/bin/osascript", ["-e", "with timeout of 1800 seconds", "-e", "tell application \"Finder\" to empty trash",
+                                                           "-e", "end timeout"], timeout: 1830)
             return r?.status == 0 ? ActResult(outcome: .done, freed: f.bytes) : ActResult(outcome: .failed(Copy.emptyTrashFailed))
         case .deleteRuntime(let id):
             let r = await Shell.run("/usr/bin/xcrun", ["simctl", "runtime", "delete", id], timeout: 300)
@@ -144,6 +147,8 @@ enum Actions {
     @MainActor
     private static func quit(pid: pid_t, bundleID: String, url: URL?, name: String, history: [Sample], keep: Set<String>, tuning: Tuning,
                              strict: Bool) async -> (Outcome, UndoRecord?) {
+        // Without a bundle id there is no telling whether the pid still belongs to the app the row was made for.
+        guard !bundleID.isEmpty else { return (.refused(Copy.refusedSystem), nil) }
         guard let app = NSRunningApplication(processIdentifier: pid), app.bundleIdentifier == bundleID, !app.isTerminated else {
             return (.done, url.map { .reopen($0) })   // already gone
         }
@@ -183,7 +188,7 @@ enum Actions {
     }
 
     /// SIGTERM to a process of ours, re-checked right now: the same process (against pid reuse), not part of macOS, not an
-    /// essential app, and for Tidy up rows nobody connected since the scan. No SIGKILL, ever.
+    /// essential app, not someone's terminal, and for Tidy up rows nobody connected since the scan. No SIGKILL, ever.
     @MainActor
     private static func terminate(_ t: Finding.Target, name: String, checkClients: Bool) async -> Outcome {
         guard let same = ours(pid: t.pid, start: t.start) else { return .done }
@@ -192,6 +197,10 @@ enum Actions {
         if path.isEmpty || Safety.system(path) || Safety.neverNames.contains((path as NSString).lastPathComponent)
             || t.pid == ProcessInfo.processInfo.processIdentifier { return .refused(Copy.refusedSystem) }
         if let id = NSRunningApplication(processIdentifier: t.pid)?.bundleIdentifier, Safety.essential(id) { return .refused(Copy.refusedEssential) }
+        let names = ([t.pid] + Sampler.treePids(t.pid)).map { Sampler.programName(Sampler.currentPath($0)) }
+        if Safety.shells.contains(Sampler.programName(path)) || names.contains(where: { Safety.terminalHosts.contains($0) }) {
+            return .refused(Copy.refusedTerminal)
+        }
         if checkClients, Sampler.liveClients(root: t.pid) > 0 { return .refused(Copy.refusedConnected) }
         guard kill(t.pid, SIGTERM) == 0 else { return .failed(Copy.couldNotClose(name)) }
         return await gone(t.pid) ? .done : .stillRunning
@@ -238,7 +247,9 @@ enum Actions {
             if DiskScanner.inUse(t.path, by: usage) { return Copy.refusedInUse }
             return await DiskScanner.recentlyWritten(t.path, minutes: 10) ? Copy.refusedBusy : nil
         case .worktree:
-            return await DiskScanner.worktreeHold(t.path, using: usage)
+            return await DiskScanner.worktreeHold(t.path, using: usage, strict: false)
+        case .mergedWorktree:
+            return await DiskScanner.worktreeHold(t.path, using: usage, strict: true)
         case .unused:
             return DiskScanner.inUse(t.path, by: usage) ? Copy.refusedInUse : nil
         }

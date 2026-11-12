@@ -8,6 +8,7 @@ enum Safety {
         "com.apple.notificationcenterui", "com.apple.loginwindow", "com.apple.ScreenSharing",
         // Where the user works: terminals, editors, Claude
         "com.apple.Terminal", "com.googlecode.iterm2", "dev.warp.Warp-Stable", "com.mitchellh.ghostty", "org.alacritty",
+        "com.github.wez.wezterm", "org.tabby", "com.raphaelamorim.rio",
         "net.kovidgoyal.kitty", "co.zeit.hyper", "com.microsoft.VSCode", "com.todesktop.230313mzl4w4u92", "dev.zed.Zed",
         "com.exafunction.windsurf", "com.apple.dt.Xcode", "com.google.android.studio", "com.anthropic.claudefordesktop",
         // Browsers: tabs are unsaved state
@@ -39,6 +40,15 @@ enum Safety {
     /// System tools inside a never-path that hold no state of their own, so a Good to know button may stop one of ours.
     static let signalable: Set<String> = ["/usr/bin/caffeinate"]
     static let keepKey = "keep"
+    /// Programs that hold someone's terminal sessions: stopping one ends every shell and program inside it.
+    static let terminalHosts: Set<String> = ["tmux", "screen", "zellij", "mosh-server", "dtach", "abduco", "sshd", "sshd-session", "login", "ttyd", "wetty"]
+    /// Shells. One at the top of a tree (a login shell, an orphaned shell) is someone's terminal.
+    static let shells: Set<String> = ["zsh", "bash", "sh", "fish", "nu", "tcsh", "csh", "ksh", "dash", "xonsh", "elvish"]
+
+    /// A tree that is, or holds, someone's terminal: no Stop button may reach it.
+    static func holdsTerminals(_ root: Sample.Proc, in s: Sample) -> Bool {
+        shells.contains(root.name) || s.tree(root.pid).contains { terminalHosts.contains($0.name) }
+    }
 
     static func essential(_ bundleID: String) -> Bool {
         neverBundles.contains(bundleID) || neverBundlePrefixes.contains { bundleID.hasPrefix($0) }

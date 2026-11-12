@@ -115,7 +115,10 @@ enum Copy {
     }
     /// The filled button of the inline confirm.
     static func confirmVerb(_ action: Finding.Action) -> String { action == .emptyTrash ? "Empty Trash" : "Remove" }
-    static let cantUndo = "This can't be undone."
+    /// What the inline confirm says. Emptying takes everything in the Trash, not only what YouFixIt put there.
+    static func confirmNote(_ action: Finding.Action) -> String {
+        action == .emptyTrash ? "Everything in the Trash goes for good, not only what YouFixIt put there. This can't be undone." : "This can't be undone."
+    }
     static let cancel = "Cancel"
     /// The line under Good to know after a button did its work.
     static func acted(_ action: Finding.Action, name: String, freed: UInt64) -> String {
@@ -145,7 +148,10 @@ enum Copy {
     static let refusedKept = "On your Always keep list."
     static let refusedBusy = "It's busy with something, so it stays."
     static let refusedConnected = "Something is connected to it, so it stays."
-    static let refusedChanges = "It has changes that were never committed, so it stays."
+    static let refusedChanges = "It holds work that isn't saved anywhere else, so it stays."
+    static let refusedRecent = "It was worked on in the last day, so it stays."
+    static let refusedUnmerged = "Its work isn't merged yet, so it stays."
+    static let refusedTerminal = "It holds terminal sessions, so it stays."
     static func refusedAppOpen(_ name: String) -> String { "\(name) is open, so its cache stays. Quit it first." }
     static let backupFailed = "Time Machine didn't stop. You can skip the backup from its menu."
     static let restartFailed = "Couldn't open the Restart window. Restart from the Apple menu instead."
@@ -215,12 +221,18 @@ enum Copy {
     static func appCache(_ app: String) -> String { "\(app) keeps downloaded data here and fetches it again when needed. It can go while \(app) is closed." }
     static func appCacheOpen(_ app: String) -> String { "\(app) keeps downloaded data here and fetches it again when needed. Quit \(app) first to clear it." }
     static func unmergedWorktrees(_ project: String) -> String { "Unmerged worktrees in \(project)" }
-    static func whyUnmergedWorktrees(_ n: Int) -> String {
-        "\(n == 1 ? "1 quiet copy" : "\(n) quiet copies") with commits that were never merged. Their branches keep the commits, so the folders can go."
+    static func whyUnmergedWorktrees(_ n: Int, local: Bool) -> String {
+        let copies = n == 1 ? "1 quiet copy" : "\(n) quiet copies"
+        return local ? "\(copies) with unmerged commits, which their branches keep. Local files git ignores go to the Trash with them."
+            : "\(copies) with commits that were never merged. Their branches keep the commits, so the folders can go."
     }
-    static func dirtyWorktrees(_ project: String) -> String { "Worktrees with changes in \(project)" }
+    static func localWorktrees(_ project: String) -> String { "Worktrees with local files in \(project)" }
+    static func whyLocalWorktrees(_ n: Int) -> String {
+        "\(n == 1 ? "1 copy whose work is merged still holds" : "\(n) copies whose work is merged still hold") local files git ignores, like .env files. They go to the Trash too."
+    }
+    static func dirtyWorktrees(_ project: String) -> String { "Worktrees with unsaved work in \(project)" }
     static func whyDirtyWorktrees(_ n: Int) -> String {
-        "\(n == 1 ? "1 quiet copy has" : "\(n) quiet copies have") changes that were never committed. Look through them before removing any."
+        "\(n == 1 ? "1 quiet copy holds" : "\(n) quiet copies hold") work found nowhere else, like uncommitted changes. Look through them before removing any."
     }
     static func lowDisk(_ free: UInt64) -> String { "Only \(Format.size(free)) of space is left. The things above are the quickest way to make room." }
 

@@ -604,18 +604,23 @@ enum Shell {
         process.standardError = FileHandle.nullDevice
         let handle = pipe.fileHandleForReading
         let reader = Task.detached { handle.readDataToEndOfFile() }
+        // The clock runs while the tool does. Past the timeout our own helper gets SIGTERM, and SIGKILL five seconds later,
+        // so a hung tool can never leave a button spinning.
+        let timer = Task.detached {
+            try? await Task.sleep(for: .seconds(timeout))
+            guard !Task.isCancelled, box.process.isRunning else { return }
+            box.process.terminate()
+            try? await Task.sleep(for: .seconds(5))
+            if !Task.isCancelled, box.process.isRunning { kill(box.process.processIdentifier, SIGKILL) }
+        }
         var started = true
         await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
             process.terminationHandler = { _ in c.resume() }
             do { try process.run() } catch { started = false; c.resume() }
         }
-        guard started else { reader.cancel(); return nil }
-        let timer = Task.detached {
-            try? await Task.sleep(for: .seconds(timeout))
-            if box.process.isRunning { box.process.terminate() }
-        }
-        let data = await reader.value
         timer.cancel()
+        guard started else { reader.cancel(); return nil }
+        let data = await reader.value
         return Result(status: process.terminationStatus, out: String(decoding: data, as: UTF8.self))
     }
 }

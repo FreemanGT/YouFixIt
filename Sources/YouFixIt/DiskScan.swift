@@ -6,7 +6,8 @@ import Foundation
 enum DiskScanner {
     nonisolated static let home = NSHomeDirectory()
     /// Folders under ~/.cache that are plain download caches, refilled by their tool on the next run.
-    /// Anything else there (browser installs, model files, a running tool's own data) is explained, never trashed.
+    /// Anything else there (browser installs, model files, a running tool's own data) is never part of Tidy up: it is
+    /// explained, with a Move to Trash button for when the user decides.
     nonisolated static let refillable: Set<String> = ["pip", "uv", "pypoetry", "pnpm", "yarn", "node-gyp", "typescript", "go-build", "prisma", "pre-commit"]
 
     struct Candidate: Sendable {
@@ -172,11 +173,89 @@ enum DiskScanner {
         return ["index", "HEAD", "logs/HEAD"].compactMap { (try? fm.attributesOfItem(atPath: "\(dir)/\($0)"))?[.modificationDate] as? Date }.max()
     }
 
-    /// Nothing changed and nothing new: `git status` prints no line. Any failure counts as changed.
-    nonisolated static func clean(_ worktree: String) async -> Bool {
-        guard let git, let r = await Shell.run(git, ["-C", worktree, "--no-optional-locks", "status", "--porcelain"], timeout: 90),
-              r.status == 0 else { return false }
-        return r.out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    /// Ignored folders that tools build again (dependencies, build output, caches, generated code), and ignored files nobody
+    /// misses, Claude's own preview settings among them.
+    nonisolated static let regrows: Set<String> = [
+        "node_modules", ".next", ".nuxt", ".svelte-kit", ".turbo", ".vercel", ".expo", ".parcel-cache", ".cache", ".wrangler", ".astro",
+        ".angular", ".docusaurus", "dist", "build", ".build", "out", "target", "coverage", "storybook-static", "playwright-report",
+        "test-results", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "venv", ".tox", "Pods", "DerivedData",
+        ".gradle", ".dart_tool", "vendor", "tmp", "log", "logs", "generated", "__generated__",
+    ]
+    nonisolated static let throwaway: Set<String> = [".DS_Store", "settings.local.json", "next-env.d.ts", ".eslintcache"]
+
+    /// A path that regrows (a dependency or build folder anywhere in it) or that nobody misses.
+    nonisolated static func disposable(_ path: String) -> Bool {
+        let parts = path.split(separator: "/").map(String.init)
+        if parts.contains(where: { regrows.contains($0) }) { return true }
+        guard let last = parts.last else { return true }
+        if throwaway.contains(last) || last.hasSuffix(".log") || last.hasSuffix(".tsbuildinfo") { return true }
+        return path == ".claude/launch.json" || path.hasSuffix("/.claude/launch.json")
+    }
+
+    /// What `git status --porcelain -z --ignored` shows living only in this worktree. A change, a staged file or one git
+    /// does not track is work. An ignored file is local (an .env, a scratch folder) unless it is disposable or the main
+    /// checkout has the same file (`isCopy`). An ignored folder is looked into: `inside` lists its files, nil when too many.
+    nonisolated static func keeps(_ status: String, isCopy: (String) -> Bool, inside: (String) -> [String]?) -> DiskScan.Keeps {
+        var found = DiskScan.Keeps.nothing
+        for entry in status.split(separator: "\0").map(String.init) where !entry.isEmpty {
+            guard entry.hasPrefix("!! ") else { return .work }
+            let raw = String(entry.dropFirst(3))
+            let path = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if disposable(path) || isCopy(path) { continue }
+            if raw.hasSuffix("/"), let files = inside(path),
+               files.allSatisfy({ disposable("\(path)/\($0)") || isCopy("\(path)/\($0)") }) { continue }
+            found = .local
+        }
+        return found
+    }
+
+    /// What lives only in the worktree. Any failure counts as work.
+    nonisolated static func keeps(_ worktree: String, project: String) async -> DiskScan.Keeps {
+        guard let git, let r = await Shell.run(git, ["-C", worktree, "--no-optional-locks", "status", "--porcelain", "-z",
+                                                     "--untracked-files=normal", "--ignored"], timeout: 90), r.status == 0 else { return .work }
+        let fm = FileManager.default
+        return keeps(r.out, isCopy: { path in
+            var isDir: ObjCBool = false
+            let mine = "\(worktree)/\(path)"
+            guard fm.fileExists(atPath: mine, isDirectory: &isDir), !isDir.boolValue else { return false }
+            return fm.contentsEqual(atPath: mine, andPath: "\(project)/\(path)")
+        }, inside: { files(in: "\(worktree)/\($0)", limit: 400) })
+    }
+
+    /// The files under a folder, relative to it, without following links or entering folders that regrow; nil past `limit`.
+    nonisolated static func files(in folder: String, limit: Int) -> [String]? {
+        guard let walker = FileManager.default.enumerator(atPath: folder) else { return nil }
+        var out: [String] = []
+        while let rel = walker.nextObject() as? String {
+            let type = walker.fileAttributes?[.type] as? FileAttributeType
+            if type == .typeDirectory {
+                if regrows.contains((rel as NSString).lastPathComponent) { walker.skipDescendants() }
+                continue
+            }
+            guard type == .typeRegular else { continue }     // a link holds no data of its own
+            out.append(rel)
+            if out.count > limit { return nil }
+        }
+        return out
+    }
+
+    /// git is in the middle of something here (a rebase, a merge, a cherry-pick, a bisect), or the worktree is locked.
+    nonisolated static func unfinished(_ worktree: String) -> Bool {
+        guard let dir = gitdir(worktree) else { return true }
+        let fm = FileManager.default
+        return ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "locked"]
+            .contains { fm.fileExists(atPath: "\(dir)/\($0)") }
+    }
+
+    /// HEAD is a commit rather than a branch, so its commits may be on no branch at all.
+    nonisolated static func detached(_ worktree: String) -> Bool {
+        guard let dir = gitdir(worktree), let head = try? String(contentsOfFile: "\(dir)/HEAD", encoding: .utf8) else { return true }
+        return !head.hasPrefix("ref: ")
+    }
+
+    /// The project a Claude worktree belongs to: the folder that holds `.claude/worktrees`.
+    nonisolated static func worktreeProject(_ path: String) -> String? {
+        path.range(of: "/.claude/worktrees/").map { String(path[..<$0.lowerBound]) }
     }
 
     /// The worktree's commit is already on the project's main line: the default branch, here or on origin.
@@ -206,11 +285,18 @@ enum DiskScanner {
             var pending = quiet[...]
             func launch(_ f: (project: String, path: String)) {
                 group.addTask {
+                    // Finished: its work is on the main line and nothing lives only here. Unmerged: its commits are on a
+                    // branch, which keeps them. Either may hold local files git ignores. Anything else is only explained.
+                    let found: DiskScan.Keeps = unfinished(f.path) ? .work : await keeps(f.path, project: f.project)
                     let state: DiskScan.Worktree
-                    if !(await clean(f.path)) {
+                    if found == .work {
+                        state = .dirty
+                    } else if await merged(f.path, project: f.project) {
+                        state = found == .local ? .finishedLocal : .finished
+                    } else if detached(f.path) {
                         state = .dirty
                     } else {
-                        state = await merged(f.path, project: f.project) ? .finished : .unmerged
+                        state = found == .local ? .unmergedLocal : .unmerged
                     }
                     guard let r = await Shell.run("/usr/bin/du", ["-sk", f.path], timeout: 120), r.status == 0,
                           let kb = UInt64(r.out.split(separator: "\t").first?.trimmingCharacters(in: .whitespaces) ?? "") else { return nil }
@@ -228,12 +314,19 @@ enum DiskScanner {
         return items
     }
 
-    /// Why a worktree must stay right now, or nil when it may move: git touched it in the last ten minutes, something
-    /// runs inside, or it has changes nobody committed.
-    nonisolated static func worktreeHold(_ path: String, using usage: Usage) async -> String? {
-        if let last = gitActivity(path), Date().timeIntervalSince(last) < 600 { return Copy.refusedBusy }
+    /// Why a worktree must stay right now, or nil when it may move. Everything that made its row is checked again: quiet
+    /// for a day, nothing running inside, git not mid-operation, no work found only here. `strict` is the pre-selected
+    /// row: nothing at all may live only there and its work must still be merged. A pressed button may take local files
+    /// along (its row said so), as long as the commits are merged or on a branch.
+    nonisolated static func worktreeHold(_ path: String, using usage: Usage, strict: Bool) async -> String? {
+        if let last = gitActivity(path), Date().timeIntervalSince(last) < 86_400 { return Copy.refusedRecent }
         if inUse(path, by: usage) { return Copy.refusedInUse }
-        if !(await clean(path)) { return Copy.refusedChanges }
+        guard let project = worktreeProject(path), !unfinished(path) else { return Copy.refusedChanges }
+        let found = await keeps(path, project: project)
+        if found == .work || (strict && found == .local) { return Copy.refusedChanges }
+        let isMerged = await merged(path, project: project)
+        if strict && !isMerged { return Copy.refusedUnmerged }
+        if !isMerged && detached(path) { return Copy.refusedChanges }
         return nil
     }
 

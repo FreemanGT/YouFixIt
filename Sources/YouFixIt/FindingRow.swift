@@ -196,7 +196,7 @@ struct KnowRow: View {
     }
 
     private var why: String {
-        if confirming { return Copy.cantUndo }
+        if confirming, let action = finding.action { return Copy.confirmNote(action) }
         switch outcome {
         case .done: return engine.acted?.id == finding.id ? engine.acted?.text ?? finding.why : finding.why
         case .askedToSave: return Copy.askedToSave(finding.name)

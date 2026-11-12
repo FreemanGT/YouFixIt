@@ -371,6 +371,8 @@ enum Fixtures {
             item(.worktree, "\(worktrees)/agent-a2", 700, owner: project, state: .finished),
             item(.worktree, "\(worktrees)/agent-a3", 800, owner: project, state: .finished),
             item(.worktree, "\(worktrees)/brand-b1", 800, owner: project, state: .unmerged),
+            item(.worktree, "\(worktrees)/brand-b2", 300, owner: project, state: .unmergedLocal),
+            item(.worktree, "\(worktrees)/env-d1", 700, owner: project, state: .finishedLocal),
             item(.worktree, "\(worktrees)/fix-c1", 600, owner: project, state: .dirty),
             item(.npx, "/Users/me/.npm/_npx/0a1b", 400),
             item(.npx, "/Users/me/.npm/_npx/2c3d", 300),
@@ -532,6 +534,7 @@ func runSelfTest() {
           "an idle Gradle daemon is a Tidy up row, and only that: \(gradle.map(\.id))")
     check(acts(ids(Fixtures.gradleDaemon) { _, s in s.procs = s.procs.map { $0.pid == 4600 ? Fixtures.proc(4600, 1, "java", path: $0.path, ago: 50_000, cpu: 0.6, mb: 900) : $0 } }).isEmpty,
           "a building one is not")
+    check(acts(ids(Fixtures.gradleDaemon) { _, s in s.clients = [4600: 1] }).isEmpty, "one an IDE is connected to is not")
 
     print("sleep")
     let awake = ids(Fixtures.sleepBlocker)
@@ -539,6 +542,8 @@ func runSelfTest() {
     check(vorssaint?.offer == true && vorssaint?.why == "Vorssaint has kept your Mac awake for 23 hours, so it can't sleep to save power.",
           "an app keeping the Mac awake for a day is offered a Quit: \(vorssaint?.why ?? "nil")")
     check(offers(awake, "know:awake:/usr/bin/caffeinate"), "a forgotten caffeinate is offered a Stop")
+    let nameless = ids(Fixtures.sleepBlocker) { _, s in s.apps = s.apps.map { $0.pid == 4700 ? Fixtures.app(4700, "", $0.name, accessory: true) : $0 } }
+    check(!nameless.contains { if case .quitApp(let pid, _, _) = $0.action { pid == 4700 } else { false } }, "nor one keeping the Mac awake")
     check(awake.filter { $0.id.hasPrefix("know:awake:") }.count == 2, "Claude, powerd and a twenty-minute hold are not mentioned: \(awake.filter { $0.id.hasPrefix("know:awake:") }.map(\.id))")
 
     print("test browser")
@@ -577,6 +582,8 @@ func runSelfTest() {
     check(acts(ids(Fixtures.freeflowIdle) { _, s in s.apps = s.apps.map { $0.pid == 7000 ? Fixtures.app(7000, $0.bundleID, $0.name, activatedAgo: 1200) : $0 } }).isEmpty, "touched twenty minutes ago stays")
     check(acts(ids(Fixtures.freeflowIdle) { _, s in s.apps = s.apps.map { $0.pid == 7000 ? Fixtures.app(7000, $0.bundleID, $0.name, windows: 1) : $0 } }).isEmpty, "a window on screen stays")
     check(acts(ids(Fixtures.freeflowIdle, keep: ["com.freemans.freeflow"])).isEmpty, "a kept app stays")
+    check(acts(ids(Fixtures.freeflowIdle) { _, s in s.apps = s.apps.map { $0.pid == 7000 ? Fixtures.app(7000, "", $0.name) : $0 } }).isEmpty,
+          "an app without a bundle id is never quit")
     check(acts(ids(Fixtures.freeflowIdle) { _, s in s.frontmost = 7000 }).isEmpty, "the frontmost app stays")
     check(acts(ids(Fixtures.freeflowIdle) { _, s in s.procs = s.procs.map { $0.pid == 7000 ? Fixtures.proc(7000, 1, "FreeFlow", path: $0.path, ago: 20_000, mb: 200) : $0 } }).isEmpty, "a small idle app is not worth a row")
     check(acts(ids(Fixtures.freeflowIdle) { _, s in s.procs = s.procs.map { $0.pid == 7000 ? Fixtures.proc(7000, 1, "FreeFlow", path: $0.path, ago: 20_000, mb: 300) : $0 } }) == ["app:com.freemans.freeflow"], "300 MB idle is worth a row")
@@ -632,6 +639,17 @@ func runSelfTest() {
         s.procs.append(Fixtures.proc(8400, 1, "ollama", path: "/opt/homebrew/Cellar/ollama/0.5.7/bin/ollama", ago: 20_000, mb: 2000))
         s.jobs[8400] = "homebrew.mxcl.ollama"
     }, "know:brewprog"), "one launchd runs is left to the service rules")
+    let tmux = ids(Fixtures.quiet) { _, s in
+        s.procs.append(Fixtures.proc(8500, 1, "tmux", path: "/opt/homebrew/Cellar/tmux/3.5a/bin/tmux", ago: 20_000, mb: 300))
+        s.procs.append(Fixtures.proc(8501, 8500, "zsh", path: "/bin/zsh", ago: 20_000, mb: 10))
+    }
+    check(row(tmux, "know:brewprog") == nil && tmux.allSatisfy { if case .sigterm(let pid, _) = $0.action { pid != 8500 } else { true } },
+          "a tmux server holds someone's terminals: never a Stop")
+    let launcher = ids(Fixtures.quiet) { _, s in
+        s.procs.append(Fixtures.proc(8600, 1, "node", path: "/Users/me/.nvm/versions/node/v22/bin/node", ago: 20_000, mb: 40))
+        s.procs.append(Fixtures.proc(8601, 8600, "ollama", path: "/opt/homebrew/Cellar/ollama/0.5.7/bin/ollama", ago: 20_000, mb: 2000))
+    }
+    check(row(launcher, "know:brewprog") == nil, "a Homebrew program under something else is not a Homebrew row")
 
     print("menu bar apps")
     let bar = ids(Fixtures.menuBarApps)
@@ -649,6 +667,11 @@ func runSelfTest() {
     let busy = ids(Fixtures.busyProgram)
     check(acts(busy).isEmpty && offers(busy, "know:busy:9000"), "a java tree at 90% for minutes is offered a Stop: \(busy.map(\.id).filter { $0.hasPrefix("know:busy") })")
     check(!knows(busy, "know:leftover"), "the busy row is the only row for that process")
+    let shell = ids(Fixtures.busyProgram) { _, s in
+        s.procs.append(Fixtures.proc(9600, 1, "fish", path: "/opt/homebrew/bin/fish", ago: 9000, mb: 10))
+        s.procs = s.procs.map { $0.pid == 9000 ? Fixtures.proc(9000, 9600, "java", path: $0.path, ago: 3000, cpu: 0.9, mb: 800) : $0 }
+    }
+    check(row(shell, "know:busy:9600") != nil && row(shell, "know:busy:9600")?.action == nil, "a busy terminal is explained, never stopped")
     let building = ids(Fixtures.busyProgram) { _, s in
         s.procs.append(Fixtures.proc(9500, 1, "Xcode", path: "/Applications/Xcode.app/Contents/MacOS/Xcode", ago: 20_000, mb: 2000))
         s.procs = s.procs.map { $0.pid == 9000 ? Fixtures.proc(9000, 9500, "java", path: $0.path, ago: 3000, cpu: 0.9, mb: 800) : $0 }
@@ -713,13 +736,44 @@ func runSelfTest() {
     let more = ids(Fixtures.simIdle, disk: Fixtures.diskMore) { _, s in s.cwd[60_000] = "\(Fixtures.worktrees)/agent-a3/platform" }
     let finished = row(more, "worktrees:")
     if case .trashAll(let targets) = finished?.action {
-        check(finished?.actionable == true && targets.map(\.path) == ["\(Fixtures.worktrees)/agent-a1", "\(Fixtures.worktrees)/agent-a2"] && targets.allSatisfy { $0.check == .worktree },
+        check(finished?.actionable == true && targets.map(\.path) == ["\(Fixtures.worktrees)/agent-a1", "\(Fixtures.worktrees)/agent-a2"] && targets.allSatisfy { $0.check == .mergedWorktree },
               "finished worktrees are one Tidy up row, the one a session sits in left out: \(targets.map(\.path))")
     } else {
         check(false, "finished worktrees are one Tidy up row")
     }
     check(finished?.name == "Finished worktrees in Real Woo AI" && finished?.bytes == 1600 << 20, "named after the project, sized by what goes: \(finished?.name ?? "") \(finished?.bytes ?? 0)")
     check(offers(more, "know:worktrees-unmerged:"), "unmerged ones are offered, never selected")
+    if case .trashAll(let targets) = row(more, "know:worktrees-unmerged:")?.action {
+        check(targets.count == 2 && targets.allSatisfy { $0.check == .worktree }, "unmerged ones move as one, checked again when pressed")
+    } else {
+        check(false, "unmerged worktrees move as one")
+    }
+    check(row(more, "know:worktrees-unmerged:")?.why.contains("Local files") == true, "and the row says local files go with them")
+    let localRow = row(more, "know:worktrees-local:")
+    if case .trashAll(let targets) = localRow?.action {
+        check(localRow?.offer == true && targets.map(\.path) == ["\(Fixtures.worktrees)/env-d1"] && targets.allSatisfy { $0.check == .worktree },
+              "merged ones holding local files are offered, never selected: \(targets.map(\.path))")
+    } else {
+        check(false, "merged worktrees with local files are offered")
+    }
+    let never: (String) -> Bool = { _ in false }
+    let empty: (String) -> [String]? = { _ in [] }
+    func keeps(_ status: String, copy: (String) -> Bool = never, inside: (String) -> [String]? = empty) -> DiskScan.Keeps {
+        DiskScanner.keeps(status, isCopy: copy, inside: inside)
+    }
+    check(keeps("") == .nothing && keeps("!! node_modules/\0!! .next/\0!! packages/web/dist/\0!! .DS_Store\0!! src/generated/\0") == .nothing
+          && keeps("!! .claude/settings.local.json\0!! .claude/launch.json\0!! logs/dev.log\0!! tsconfig.tsbuildinfo\0") == .nothing,
+          "build output, dependencies, generated code and logs regrow, so a worktree holding only them keeps nothing")
+    check(keeps(" M src/app.ts\0") == .work && keeps("?? notes.md\0") == .work && keeps("R  new.ts\0old.ts\0") == .work
+          && keeps("!! .env.local\0 M a.ts\0") == .work, "a change, a new file or a rename is work")
+    check(keeps("!! .env.local\0") == .local && keeps("!! .env.local\0", copy: { $0 == ".env.local" }) == .nothing,
+          "an ignored file is local unless the main checkout has the same one")
+    check(keeps("!! .claude/\0", inside: { _ in ["settings.local.json", "launch.json", "skills/a.md"] }) == .local
+          && keeps("!! .claude/\0", copy: { $0 == ".claude/skills/a.md" }, inside: { _ in ["settings.local.json", "skills/a.md"] }) == .nothing
+          && keeps("!! .gstack/\0", inside: { _ in nil }) == .local,
+          "an ignored folder is looked into, and one too big to look through counts as local")
+    check(DiskScanner.worktreeProject("/Users/me/p/.claude/worktrees/a1") == "/Users/me/p" && DiskScanner.worktreeProject("/Users/me/p/a1") == nil,
+          "a worktree's project is the folder that holds .claude/worktrees")
     check(knows(more, "know:worktrees-dirty:") && !offers(more, "know:worktrees-dirty:") && row(more, "know:worktrees-dirty:")?.link?.title == Copy.showFolder,
           "ones with uncommitted changes are only explained, with Show in Finder")
     if case .trashAll(let targets) = row(more, "npx")?.action {
@@ -745,7 +799,7 @@ func runSelfTest() {
     let everything = ids(Fixtures.heavy, disk: Fixtures.disk) + ids(Fixtures.simIdle, disk: Fixtures.diskMore) + ids(Fixtures.busyProgram) + ids(Fixtures.mysqlOrphan)
         + ids(Fixtures.sleepBlocker) + ids(Fixtures.phpSwarm) + ids(Fixtures.expoOrphan) { _, s in s.listening = [] }
     let withButton = ["know:claude", "know:menubar:", "know:busy:", "know:db:", "know:awake:", "know:cache:", "know:appcache:", "know:trash",
-                      "know:runtime:", "know:device:", "know:worktrees-unmerged:", "know:leftover"]
+                      "know:runtime:", "know:device:", "know:worktrees-unmerged:", "know:worktrees-local:", "know:leftover"]
     let explainOnly = ["know:tabs:", "know:spotlight", "know:memory", "know:backlog", "know:worktrees-dirty:"]
     for prefix in withButton {
         let rows = everything.filter { $0.id.hasPrefix(prefix) }
@@ -788,6 +842,11 @@ func runSelfTest() {
     for action: Finding.Action in [.emptyTrash, .restart, .stopBackup, .deleteRuntime(id: "x"), .endSessions([]), .trashAll([]), .sigtermAll([])] {
         let line = Copy.acted(action, name: "mysqld", freed: 778 << 20)
         check(!line.contains("—") && !line.contains("!") && Copy.verb(action).count <= 18, "plain button and done line: \(Copy.verb(action)) / \(line)")
+    }
+
+    for action: Finding.Action in [.emptyTrash, .deleteRuntime(id: "x"), .deleteDevice(udid: "y")] {
+        let note = Copy.confirmNote(action)
+        check(note.hasSuffix("This can't be undone.") && !note.contains("—") && !note.contains("!") && note.count < 140, "plain confirm: \(note)")
     }
 
     print(failures == 0 ? "selftest passed" : "selftest FAILED: \(failures)")

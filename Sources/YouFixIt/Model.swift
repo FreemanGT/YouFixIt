@@ -147,7 +147,8 @@ struct Finding: Identifiable, Sendable, Equatable {
     struct TrashTarget: Sendable, Equatable {
         enum Check: Sendable, Equatable {
             case written    // nothing written inside in the last ten minutes
-            case worktree   // a git worktree: still clean, quiet, nothing running inside
+            case worktree         // a pressed worktree button: quiet a day, nothing inside, no work only there, commits kept
+            case mergedWorktree   // the pre-selected row: the same, nothing at all only there, and its work still merged
             case unused     // nothing running from it (npx packages)
         }
         let path: String
@@ -219,7 +220,12 @@ struct DiskScan: Sendable {
     enum Kind: Sendable { case derivedData, deviceSupport, previews, simCache, devCache, otherCache, orphanCache, installer, trash, runtime, oldDevice,
                           worktree, npx, claudeTemp, appCache }
     /// A Claude worktree that has been quiet for a day with nothing running inside: what its git state allows.
-    enum Worktree: Sendable { case finished, unmerged, dirty }
+    /// finished: merged, and nothing lives only there. finishedLocal: merged, but it holds local files git ignores (an .env).
+    /// unmerged(Local): its commits are on a branch that keeps them. dirty: changes, new files, commits on no branch, or git
+    /// in the middle of something.
+    enum Worktree: Sendable { case finished, finishedLocal, unmerged, unmergedLocal, dirty }
+    /// What lives only in a worktree: nothing, local files git ignores, or work (changes and files git does not track).
+    enum Keeps: Sendable { case nothing, local, work }
     struct Item: Sendable {
         let kind: Kind
         let path: String

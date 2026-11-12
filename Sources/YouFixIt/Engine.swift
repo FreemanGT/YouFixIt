@@ -92,6 +92,7 @@ final class Engine {
     /// What YouFixIt itself put in the Trash: its path in the Trash → [bytes, when]. Measuring ~/.Trash needs Full Disk
     /// Access, so this is how the Trash row knows there is space waiting there.
     private var ledger: [String: [Double]] = [:]
+    private var lastPrune = Date.distantPast
     private let launchedAt = Date()
     private var wokeAt: Date?
     private var pressureSource: DispatchSourceMemoryPressure?
@@ -126,6 +127,7 @@ final class Engine {
         // Thirty days on, Finder may have emptied it on its own, and the user has surely looked.
         let stored = UserDefaults.standard.dictionary(forKey: Self.ledgerKey) as? [String: [Double]] ?? [:]
         ledger = stored.filter { Date().timeIntervalSince1970 - ($0.value.last ?? 0) < 30 * 86_400 }
+        pruneLedger()
         if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier { lastActivated[front] = Date() }
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
@@ -211,6 +213,7 @@ final class Engine {
         trimHistory()
         lastScan = s.at
         if let disk, s.at.timeIntervalSince(disk.at) > 6 * 3600 { scanDisk() }
+        if s.at.timeIntervalSince(lastPrune) >= 60 { pruneLedger() }
         let spiked = spike.update(history, tuning: tuning)
         recompute()
         if spiked || (mood == .heavy && !running.isEmpty) { maybeNudge() }
@@ -320,17 +323,25 @@ final class Engine {
     }
 
     func undo() async {
-        guard canUndo else { return }
+        guard canUndo, acting == nil, !isWorking else { return }
         let records = undoRecords
+        // The user took these back, so they are not suggested again for a day.
+        let undone = result?.rows.filter { $0.outcome == .done }.map(\.id) ?? []
         undoRecords = []
         undoUntil = nil
         result = nil
+        var any = false
         for r in records {
-            if await Actions.undo(r) { putBack(r) }
+            if await Actions.undo(r) {
+                putBack(r)
+                any = true
+            }
         }
-        Sound.play(.undo)
+        let until = Date().addingTimeInterval(86_400)
+        for id in undone { skipUntil[id] = until }
+        if any || mock { Sound.play(.undo) }
         updateMood()
-        if !mock { scanNow() }
+        if mock { recompute() } else { scanNow() }
     }
 
     // MARK: - Good to know buttons
@@ -387,15 +398,20 @@ final class Engine {
     }
 
     func undoAct() async {
-        guard let line = acted, line.undoable else { return }
+        guard acting == nil, !isWorking, let line = acted, line.undoable else { return }
         let records = actUndo
         actUndo = []
         acted = nil
         knowOutcome[line.id] = nil
+        var any = false
         for r in records {
-            if await Actions.undo(r) { putBack(r) }
+            if await Actions.undo(r) {
+                putBack(r)
+                any = true
+            }
         }
-        Sound.play(.undo)
+        skipUntil[line.id] = Date().addingTimeInterval(86_400)
+        if any || mock { Sound.play(.undo) }
         if mock { recompute() } else { scanNow() }
     }
 
@@ -409,7 +425,12 @@ final class Engine {
         switch f.action {
         case .trash(let path): sizes[path] = f.bytes
         case .trashAll(let targets): for t in targets { sizes[t.path] = t.bytes }
-        case .emptyTrash: ledger = [:]
+        case .emptyTrash:
+            // What was in the Trash is gone for good now, so nothing from it can be put back.
+            ledger = [:]
+            undoRecords.removeAll { if case .putBack = $0 { return true } else { return false } }
+            actUndo.removeAll { if case .putBack = $0 { return true } else { return false } }
+            if let line = acted, line.undoable, actUndo.isEmpty { acted = nil }
         default: break
         }
         let now = Date().timeIntervalSince1970
@@ -424,6 +445,17 @@ final class Engine {
     private func putBack(_ record: UndoRecord) {
         guard case .putBack(let from, _) = record else { return }
         ledger.removeValue(forKey: from.path)
+        saveLedger()
+    }
+
+    /// Entries whose folder has left the Trash (emptied in Finder, or put back by hand) stop counting. A known path can be
+    /// checked without Full Disk Access, even though ~/.Trash itself cannot be listed.
+    private func pruneLedger() {
+        lastPrune = Date()
+        let fm = FileManager.default
+        let left = ledger.filter { fm.fileExists(atPath: $0.key) }
+        guard left.count != ledger.count else { return }
+        ledger = left
         saveLedger()
     }
 

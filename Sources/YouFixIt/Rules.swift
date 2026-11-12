@@ -233,7 +233,7 @@ enum Rules {
     /// R2: a Dock app untouched for an hour, with no window on screen, holding real memory and doing nothing.
     static func idleApps(_ s: Sample, _ h: [Sample], keep: Set<String>, _ t: Tuning) -> [Finding] {
         guard spans(h, t.idle) else { return [] }
-        return s.apps.filter(\.regular).compactMap { app in
+        return s.apps.filter { $0.regular && !$0.bundleID.isEmpty }.compactMap { app in
             guard let p = s.procs[app.pid], Safety.refusal(p, app: app, in: s, history: h, keep: keep, tuning: t) == nil,
                   let last = app.lastActivated, s.at.timeIntervalSince(last) >= t.appIdle,
                   app.hidden || app.windows == 0 else { return nil }
@@ -318,7 +318,7 @@ enum Rules {
             let tree = s.tree(p.pid)
             guard tree.contains(where: { s.listening.contains($0.pid) }),
                   !tree.contains(where: { (s.clients[$0.pid] ?? 0) > 0 }),
-                  !notebook(s.args[p.pid]), !keep.contains(serverKey(p, in: s)),
+                  !notebook(s.args[p.pid]), !keep.contains(serverKey(p, in: s)), !Safety.holdsTerminals(p, in: s),
                   s.at.timeIntervalSince(p.start) >= t.orphanAge, avgCPU(p.pid, h, t.idle) < 0.02 else { continue }
             let bytes = s.footprint(of: p.pid)
             let listened = ports(of: tree, in: s)
@@ -346,7 +346,8 @@ enum Rules {
         guard spans(h, t.idle) else { return [] }
         return orphans(s).filter { $0.name == "java" }.sorted { $0.pid < $1.pid }.compactMap { p in
             guard let args = s.args[p.pid], let daemon = buildDaemons.first(where: { d in args.contains { $0.contains(d.marker) } }),
-                  s.at.timeIntervalSince(p.start) >= t.idle, avgCPU(p.pid, h, t.idle) < 0.02, maxCPU(p.pid, h, 60) < 0.2 else { return nil }
+                  s.at.timeIntervalSince(p.start) >= t.idle, avgCPU(p.pid, h, t.idle) < 0.02, maxCPU(p.pid, h, 60) < 0.2,
+                  !s.tree(p.pid).contains(where: { (s.clients[$0.pid] ?? 0) > 0 }) else { return nil }   // an IDE still talks to it
             let bytes = s.footprint(of: p.pid)
             guard bytes >= 150 << 20 else { return nil }
             return Finding(id: "daemon:\(p.pid):\(Int(p.start.timeIntervalSince1970))", keepKey: "daemon:\(daemon.marker)", group: .running,
@@ -476,15 +477,21 @@ enum Rules {
         for (project, group) in Dictionary(grouping: trees, by: { $0.owner ?? "" }).sorted(by: { $0.key < $1.key }) where !project.isEmpty {
             let name = Self.project(project) ?? (project as NSString).lastPathComponent
             let finished = group.filter { $0.state == .finished }
-            let unmerged = group.filter { $0.state == .unmerged }
+            let local = group.filter { $0.state == .finishedLocal }
+            let unmerged = group.filter { $0.state == .unmerged || $0.state == .unmergedLocal }
             let dirty = group.filter { $0.state == .dirty }
             if !finished.isEmpty, sum(finished) >= t.diskMin {
                 rows.append(Finding(id: "worktrees:\(project)", keepKey: "worktrees:\(project)", group: .space, name: Copy.finishedWorktrees(name),
-                                    why: Copy.whyFinishedWorktrees(finished.count), bytes: sum(finished), action: .trashAll(targets(finished, .worktree)),
+                                    why: Copy.whyFinishedWorktrees(finished.count), bytes: sum(finished), action: .trashAll(targets(finished, .mergedWorktree)),
                                     undoLabel: Copy.putBack, link: nil, iconPath: nil, symbol: "arrow.triangle.branch"))
             }
+            if !local.isEmpty, sum(local) >= t.diskMin {
+                know("worktrees-local:\(project)", Copy.localWorktrees(name), Copy.whyLocalWorktrees(local.count), "arrow.triangle.branch",
+                     bytes: sum(local), link: folder("\(project)/.claude/worktrees"), action: .trashAll(targets(local, .worktree)), undo: Copy.putBack)
+            }
             if !unmerged.isEmpty, sum(unmerged) >= t.diskMin {
-                know("worktrees-unmerged:\(project)", Copy.unmergedWorktrees(name), Copy.whyUnmergedWorktrees(unmerged.count), "arrow.triangle.branch",
+                let why = Copy.whyUnmergedWorktrees(unmerged.count, local: unmerged.contains { $0.state == .unmergedLocal })
+                know("worktrees-unmerged:\(project)", Copy.unmergedWorktrees(name), why, "arrow.triangle.branch",
                      bytes: sum(unmerged), link: folder("\(project)/.claude/worktrees"), action: .trashAll(targets(unmerged, .worktree)), undo: Copy.putBack)
             }
             if !dirty.isEmpty, sum(dirty) >= t.diskMin {
@@ -580,26 +587,23 @@ enum Rules {
             if bytes >= 1 << 30 { know("vm:\(app.bundleID)", app.name, Copy.vmApp(app.name, bytes), "desktopcomputer", link: show(app), bytes: bytes) }
         }
 
-        // G14: Homebrew programs started by hand that launchd adopted. Not an app, not a launchd job (Stop would only see it
-        // respawn), not a server or database (R3 and B3 cover those). One row each.
-        var brewRoots: [pid_t: (root: Sample.Proc, name: String)] = [:]
-        for p in s.procs.values.sorted(by: { $0.pid < $1.pid }) where p.uid == Sampler.me
+        // G14: Homebrew programs started by hand that launchd adopted, each the top of its own tree, so the row names what
+        // Stop reaches. Not an app, not a launchd job (Stop would only see it respawn), not a server or database (R3 and B3
+        // cover those), never a tree that holds someone's terminal (tmux, a shell). One row each.
+        for p in s.procs.values.sorted(by: { $0.pid < $1.pid }) where p.uid == Sampler.me && p.ppid == 1
             && Sampler.brewPrefixes.contains(where: { p.path.hasPrefix($0) }) && !Sampler.serverNames.contains(p.name) && !Sampler.dbNames.contains(p.name) {
-            guard let root = s.root(of: p.pid), root.ppid == 1, s.app(root.pid) == nil, s.jobs[root.pid] == nil, service(root, in: s) == nil,
-                  !covered.contains(root.pid), brewRoots[root.pid] == nil else { continue }
-            brewRoots[root.pid] = (root, p.name)
-        }
-        for (root, name) in brewRoots.values.sorted(by: { $0.root.pid < $1.root.pid }) {
-            let bytes = s.footprint(of: root.pid)
-            guard bytes >= 150 << 20, s.at.timeIntervalSince(root.start) >= t.orphanAge else { continue }
-            know("brewprog:\(root.pid)", name, Copy.brewProgram, "server.rack", bytes: bytes,
-                 action: Safety.system(root.path) ? nil : .sigterm(pid: root.pid, start: root.start), keepKey: "brewprog:\(root.path)")
-            covered.insert(root.pid)
+            guard s.app(p.pid) == nil, s.jobs[p.pid] == nil, service(p, in: s) == nil, !covered.contains(p.pid),
+                  !Safety.holdsTerminals(p, in: s) else { continue }
+            let bytes = s.footprint(of: p.pid)
+            guard bytes >= 150 << 20, s.at.timeIntervalSince(p.start) >= t.orphanAge else { continue }
+            know("brewprog:\(p.pid)", p.name, Copy.brewProgram, "server.rack", bytes: bytes,
+                 action: Safety.system(p.path) ? nil : .sigterm(pid: p.pid, start: p.start), keepKey: "brewprog:\(p.path)")
+            covered.insert(p.pid)
         }
 
         // G15: menu bar apps, which the idle-app rule never looks at. Each big, quiet one gets a row with Quit.
         if spans(h, t.idle) {
-            for app in s.apps.sorted(by: { $0.pid < $1.pid }) where app.accessory && !Safety.essential(app.bundleID)
+            for app in s.apps.sorted(by: { $0.pid < $1.pid }) where app.accessory && !app.bundleID.isEmpty && !Safety.essential(app.bundleID)
                 && !vmActionable.contains(app.bundleID) && !vmExplain.contains(app.bundleID) && !covered.contains(app.pid)
                 && (app.url.map { !$0.path.hasPrefix("/System/") } ?? false) {
                 let bytes = s.footprint(of: app.pid)
@@ -622,8 +626,8 @@ enum Rules {
             let name = app?.name ?? command(s.args[p.pid], fallback: p.name)
             var action: Finding.Action?
             if let app {
-                if !Safety.essential(app.bundleID) { action = .quitApp(pid: app.pid, bundleID: app.bundleID, url: app.url) }
-            } else if !Safety.system(p.path), !insideApp(p.path) {
+                if !Safety.essential(app.bundleID), !app.bundleID.isEmpty { action = .quitApp(pid: app.pid, bundleID: app.bundleID, url: app.url) }
+            } else if !Safety.system(p.path), !insideApp(p.path), !Safety.holdsTerminals(p, in: s) {
                 action = .sigterm(pid: p.pid, start: p.start)
             }
             know("busy:\(p.pid)", name, Copy.busyProgram(name), "gauge.with.needle", link: app.flatMap(show) ?? activityMonitor,
@@ -659,10 +663,10 @@ enum Rules {
             guard let p = s.procs[pid], p.uid == Sampler.me, !Safety.system(p.path), !Safety.neverNames.contains(p.name),
                   pid != ProcessInfo.processInfo.processIdentifier else { continue }
             let app = s.app(pid)
-            if let app, Safety.essential(app.bundleID) { continue }
+            if let app, Safety.essential(app.bundleID) || app.bundleID.isEmpty { continue }
             let name = app?.name ?? command(s.args[pid], fallback: p.name)
             let action: Finding.Action? = app.map { .quitApp(pid: $0.pid, bundleID: $0.bundleID, url: $0.url) }
-                ?? (p.ppid == 1 && !insideApp(p.path) ? .sigterm(pid: pid, start: p.start) : nil)
+                ?? (p.ppid == 1 && !insideApp(p.path) && !Safety.holdsTerminals(p, in: s) ? .sigterm(pid: pid, start: p.start) : nil)
             let key = "awake:\(app?.bundleID ?? p.path)"
             know(key, name, Copy.keepingAwake(name, for: s.at.timeIntervalSince(since)), "cup.and.saucer", link: app.flatMap(show),
                  bytes: s.footprint(of: pid), action: action, undo: app != nil ? Copy.reopen : nil, keepKey: key)
@@ -691,7 +695,7 @@ enum Rules {
             }
             let name = listens ? serverName(s.args[p.pid], fallback: p.name) : command(s.args[p.pid], fallback: p.name)
             know("\(id):\(p.pid)", name, why, "terminal", link: activityMonitor, bytes: bytes,
-                 action: .sigterm(pid: p.pid, start: p.start), keepKey: serverKey(p, in: s))
+                 action: Safety.holdsTerminals(p, in: s) ? nil : .sigterm(pid: p.pid, start: p.start), keepKey: serverKey(p, in: s))
         }
         for p in s.procs.values.sorted(by: { $0.pid < $1.pid }) where p.uid == Sampler.me && p.ppid != 1 && Sampler.browserNames.contains(p.name) {
             guard let args = s.args[p.pid], isHeadless(args), s.footprint(of: p.pid) >= 300 << 20 else { continue }

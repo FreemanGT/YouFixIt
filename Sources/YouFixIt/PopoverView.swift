@@ -215,6 +215,7 @@ struct MainPane: View {
             Text(acted.text).font(Theme.font(.caption)).foregroundStyle(.secondary).lineLimit(1)
             if acted.undoable {
                 Button(Copy.undo) { Task { await engine.undoAct() } }.buttonStyle(.link).foregroundStyle(Theme.tintText).font(Theme.font(.caption))
+                    .disabled(engine.acting != nil || engine.isWorking)
             }
         }
         .transition(.opacity)
@@ -247,6 +248,7 @@ struct MainPane: View {
                 Button { Task { await engine.undo() } } label: { PillLabel(title: Copy.undo, filled: false) }
                     .buttonStyle(PillStyle(filled: false))
                     .keyboardShortcut(.defaultAction)
+                    .disabled(engine.acting != nil)
                 Text(Copy.undoCaption).font(Theme.font(.caption)).foregroundStyle(.secondary)
             } else if engine.mood != .done {
                 let none = engine.selectedFindings.isEmpty
