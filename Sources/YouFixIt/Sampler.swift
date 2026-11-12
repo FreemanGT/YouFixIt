@@ -65,7 +65,8 @@ actor Sampler {
             }
             let ppid = pid_t(bsd.pbi_ppid)
             procs[pid] = Sample.Proc(pid: pid, ppid: ppid, uid: bsd.pbi_uid, name: name, path: path,
-                                     start: Date(timeIntervalSince1970: start), cpu: cpu, footprint: footprint, diskIO: io)
+                                     start: Date(timeIntervalSince1970: start), cpu: cpu, footprint: footprint, diskIO: io,
+                                     tty: bsd.e_tdev != UInt32.max)
             children[ppid, default: []].append(pid)
         }
         prevTicks = ticksNow
@@ -133,9 +134,12 @@ actor Sampler {
         if orphanCandidates || brewCandidates {
             if let cached = jobsCache, now.timeIntervalSince(cached.at) < 60 {
                 jobs = cached.jobs
+            } else if let fresh = await Self.jobs() {
+                jobs = fresh
+                jobsCache = (now, fresh)
             } else {
-                jobs = await Self.jobs()
-                jobsCache = (now, jobs)
+                // launchctl did not answer. Its last answer beats none, which would make every launchd job look left behind.
+                jobs = jobsCache?.jobs ?? [:]
             }
         }
         for (root, label) in jobs where Self.brewLabels.contains(where: { label.hasPrefix($0) }) { sockets(under: root) { _ in true } }
@@ -245,6 +249,13 @@ actor Sampler {
     }
 
     /// Owner and parent of a process right now; nil when it is gone.
+    /// The process has a controlling terminal (a Terminal tab, an ssh or tmux pane): someone's terminal session.
+    nonisolated static func hasTerminal(_ pid: pid_t) -> Bool {
+        var bsd = proc_bsdinfo()
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 else { return false }
+        return bsd.e_tdev != UInt32.max
+    }
+
     nonisolated static func info(_ pid: pid_t) -> (uid: uid_t, ppid: pid_t)? {
         var bsd = proc_bsdinfo()
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 else { return nil }
@@ -571,8 +582,8 @@ actor Sampler {
     }
 
     /// Our launchd jobs that are running right now: pid to label. Rows are "PID\tStatus\tLabel".
-    nonisolated static func jobs() async -> [pid_t: String] {
-        guard let out = await Shell.run("/bin/launchctl", ["list"], timeout: 10), out.status == 0 else { return [:] }
+    nonisolated static func jobs() async -> [pid_t: String]? {
+        guard let out = await Shell.run("/bin/launchctl", ["list"], timeout: 10), out.status == 0 else { return nil }
         var jobs: [pid_t: String] = [:]
         for line in out.out.split(separator: "\n").dropFirst() {
             let cols = line.split(separator: "\t")
@@ -582,45 +593,74 @@ actor Sampler {
     }
 }
 
-/// Runs a system tool with a timeout and returns what it printed. Never throws; nil means it could not start.
+/// Runs a system tool with a timeout and returns what it printed. Never throws. nil means it could not start, or it ran
+/// past its timeout (output and all): every caller reads nil as "don't know", which leaves things as they are.
 enum Shell {
     struct Result: Sendable {
         let status: Int32
         let out: String
     }
 
-    private final class Box: @unchecked Sendable {
+    /// One run's state, shared by the exit handler, the reader thread and the clock. Every change happens under `lock`.
+    private final class Run: @unchecked Sendable {
         let process = Process()
+        private let lock = NSLock()
+        private var exited = false
+        private var output: Data?
+        private var gaveUp = false
+        private var waiter: CheckedContinuation<Void, Never>?
+
+        private var finished: Bool { exited && output != nil }
+        /// Wakes the waiting caller once the tool has exited and its output has ended, or the run was given up on.
+        private func settle() {
+            guard finished || gaveUp, let w = waiter else { return }
+            waiter = nil
+            w.resume()
+        }
+        func didExit() { lock.lock(); exited = true; settle(); lock.unlock() }
+        func didRead(_ data: Data) { lock.lock(); output = data; settle(); lock.unlock() }
+        /// Gives up unless the run already finished; true when it did give up.
+        func giveUp() -> Bool {
+            lock.lock(); defer { lock.unlock() }
+            guard !finished, !gaveUp else { return false }
+            gaveUp = true
+            settle()
+            return true
+        }
+        func wait() async {
+            await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+                lock.lock(); waiter = c; settle(); lock.unlock()
+            }
+        }
+        /// What it printed, or nil when the run was given up on.
+        var result: Data? { lock.lock(); defer { lock.unlock() }; return gaveUp ? nil : output }
     }
 
     static func run(_ path: String, _ args: [String], timeout: TimeInterval, env: [String: String] = [:]) async -> Result? {
-        let box = Box()
-        let process = box.process
-        process.executableURL = URL(fileURLWithPath: path)
-        process.arguments = args
-        if !env.isEmpty { process.environment = ProcessInfo.processInfo.environment.merging(env) { $1 } }
+        let run = Run()
+        run.process.executableURL = URL(fileURLWithPath: path)
+        run.process.arguments = args
+        if !env.isEmpty { run.process.environment = ProcessInfo.processInfo.environment.merging(env) { $1 } }
         let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
+        run.process.standardOutput = pipe
+        run.process.standardError = FileHandle.nullDevice
+        run.process.terminationHandler = { _ in run.didExit() }
+        do { try run.process.run() } catch { return nil }
         let handle = pipe.fileHandleForReading
-        let reader = Task.detached { handle.readDataToEndOfFile() }
-        // The clock runs while the tool does. Past the timeout our own helper gets SIGTERM, and SIGKILL five seconds later,
-        // so a hung tool can never leave a button spinning.
-        let timer = Task.detached {
-            try? await Task.sleep(for: .seconds(timeout))
-            guard !Task.isCancelled, box.process.isRunning else { return }
-            box.process.terminate()
-            try? await Task.sleep(for: .seconds(5))
-            if !Task.isCancelled, box.process.isRunning { kill(box.process.processIdentifier, SIGKILL) }
+        // Read on a plain thread, never the shared pool: a tool's own child can keep the pipe open after the tool exits.
+        DispatchQueue.global(qos: .utility).async { run.didRead(handle.readDataToEndOfFile()) }
+        // Past the timeout the run is given up on, so a hung tool can never leave a button spinning. Our own helper then
+        // gets SIGTERM, and SIGKILL five seconds later.
+        let pid = run.process.processIdentifier
+        DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + timeout) {
+            guard run.giveUp(), run.process.isRunning else { return }
+            run.process.terminate()
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 5) {
+                if run.process.isRunning { kill(pid, SIGKILL) }
+            }
         }
-        var started = true
-        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
-            process.terminationHandler = { _ in c.resume() }
-            do { try process.run() } catch { started = false; c.resume() }
-        }
-        timer.cancel()
-        guard started else { reader.cancel(); return nil }
-        let data = await reader.value
-        return Result(status: process.terminationStatus, out: String(decoding: data, as: UTF8.self))
+        await run.wait()
+        guard let data = run.result else { return nil }
+        return Result(status: run.process.terminationStatus, out: String(decoding: data, as: UTF8.self))
     }
 }

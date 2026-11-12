@@ -41,13 +41,15 @@ enum Safety {
     static let signalable: Set<String> = ["/usr/bin/caffeinate"]
     static let keepKey = "keep"
     /// Programs that hold someone's terminal sessions: stopping one ends every shell and program inside it.
-    static let terminalHosts: Set<String> = ["tmux", "screen", "zellij", "mosh-server", "dtach", "abduco", "sshd", "sshd-session", "login", "ttyd", "wetty"]
+    static let terminalHosts: Set<String> = ["tmux", "screen", "zellij", "mosh-server", "dtach", "abduco", "sshd", "sshd-session", "login", "ttyd", "wetty",
+                                             "tmate", "wezterm-mux-server", "etserver"]
     /// Shells. One at the top of a tree (a login shell, an orphaned shell) is someone's terminal.
     static let shells: Set<String> = ["zsh", "bash", "sh", "fish", "nu", "tcsh", "csh", "ksh", "dash", "xonsh", "elvish"]
 
-    /// A tree that is, or holds, someone's terminal: no Stop button may reach it.
+    /// A tree that is, or holds, someone's terminal: a shell at its top, a terminal host anywhere in it, or anything in it
+    /// attached to a terminal (a web terminal's shells, an editor's terminal panes). No Stop button may reach it.
     static func holdsTerminals(_ root: Sample.Proc, in s: Sample) -> Bool {
-        shells.contains(root.name) || s.tree(root.pid).contains { terminalHosts.contains($0.name) }
+        shells.contains(root.name) || root.tty || s.tree(root.pid).contains { terminalHosts.contains($0.name) || $0.tty }
     }
 
     static func essential(_ bundleID: String) -> Bool {

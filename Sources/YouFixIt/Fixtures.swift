@@ -32,9 +32,9 @@ enum Fixtures {
     }
 
     static func proc(_ pid: pid_t, _ ppid: pid_t, _ name: String, path: String? = nil, uid: uid_t = Sampler.me,
-                     ago: TimeInterval, cpu: Double = 0, mb: UInt64 = 10, io: UInt64 = 0) -> Sample.Proc {
+                     ago: TimeInterval, cpu: Double = 0, mb: UInt64 = 10, io: UInt64 = 0, tty: Bool = false) -> Sample.Proc {
         Sample.Proc(pid: pid, ppid: ppid, uid: uid, name: name, path: path ?? "/Users/me/bin/\(name)",
-                    start: now.addingTimeInterval(-ago), cpu: cpu, footprint: mb << 20, diskIO: io)
+                    start: now.addingTimeInterval(-ago), cpu: cpu, footprint: mb << 20, diskIO: io, tty: tty)
     }
 
     static func app(_ pid: pid_t, _ bundle: String, _ name: String, activatedAgo: TimeInterval = 10_800, windows: Int = 0,
@@ -418,6 +418,11 @@ enum Fixtures {
 
 // MARK: - Self test
 
+/// Carries one Shell.run result out of a detached task for the self-test.
+final class ShellBox: @unchecked Sendable {
+    var result: Shell.Result?
+}
+
 @MainActor
 func runSelfTest() {
     var failures = 0
@@ -468,6 +473,9 @@ func runSelfTest() {
     }).isEmpty, "a server whose Claude session is alive is in use")
     check(acts(ids(Fixtures.expoOrphan) { _, s in s.jobs[36644] = "com.example.job" }).isEmpty, "a launchd job is not an orphan")
     check(acts(ids(Fixtures.expoOrphan) { _, s in s.procs = s.procs.map { $0.pid == 36644 ? Fixtures.proc(36644, 1, "node", path: "/Applications/Stremio.app/Contents/MacOS/node", ago: 10_800, mb: 300) : $0 } }).isEmpty, "node inside an app bundle belongs to that app")
+    let webTerminal = ids(Fixtures.expoOrphan) { _, s in s.procs.append(Fixtures.proc(36_700, 36644, "bash", path: "/bin/bash", ago: 3000, tty: true)) }
+    check(acts(webTerminal).isEmpty && webTerminal.allSatisfy { if case .sigterm(let pid, _) = $0.action { pid != 36644 } else { true } },
+          "a server with a shell attached to a terminal (a web terminal) is never stopped")
     let watcher = ids(Fixtures.expoOrphan) { _, s in s.listening = [] }
     check(acts(watcher).isEmpty && offers(watcher, "know:leftover-watcher:36644"), "no listening socket, no server: a watcher is offered a Stop, never selected")
     let connected = ids(Fixtures.expoOrphan) { _, s in s.clients = [36677: 1] }
@@ -650,6 +658,8 @@ func runSelfTest() {
         s.procs.append(Fixtures.proc(8601, 8600, "ollama", path: "/opt/homebrew/Cellar/ollama/0.5.7/bin/ollama", ago: 20_000, mb: 2000))
     }
     check(row(launcher, "know:brewprog") == nil, "a Homebrew program under something else is not a Homebrew row")
+    check(row(ids(Fixtures.quiet) { _, s in s.procs.append(Fixtures.proc(8700, 1, "tmate", path: "/opt/homebrew/Cellar/tmate/2.4.0/bin/tmate", ago: 20_000, mb: 300)) },
+              "know:brewprog") == nil, "nor is tmate, another terminal host")
 
     print("menu bar apps")
     let bar = ids(Fixtures.menuBarApps)
@@ -770,8 +780,25 @@ func runSelfTest() {
           "an ignored file is local unless the main checkout has the same one")
     check(keeps("!! .claude/\0", inside: { _ in ["settings.local.json", "launch.json", "skills/a.md"] }) == .local
           && keeps("!! .claude/\0", copy: { $0 == ".claude/skills/a.md" }, inside: { _ in ["settings.local.json", "skills/a.md"] }) == .nothing
-          && keeps("!! .gstack/\0", inside: { _ in nil }) == .local,
-          "an ignored folder is looked into, and one too big to look through counts as local")
+          && keeps("!! .gstack/\0", inside: { _ in nil }) == .work,
+          "an ignored folder is looked into, and one too big or unreadable to look through counts as work")
+    check(keeps("!! .claude/\0", inside: { _ in ["settings.local.json", "worktrees/b/.git", "worktrees/b/a.ts"] }) == .work,
+          "another worktree inside an ignored folder is work")
+    check(keeps("!! tmp/\0", inside: { _ in ["research.md"] }) == .local && keeps("!! out/\0", inside: { _ in ["video.mp4"] }) == .local,
+          "notes in tmp and renders in out are local files, not build output")
+    let tree = FileManager.default.temporaryDirectory.appendingPathComponent("youfixit-selftest-\(getpid())").path
+    try? FileManager.default.removeItem(atPath: tree)
+    for dir in ["sub", "node_modules/x", "nested", "locked"] { try? FileManager.default.createDirectory(atPath: "\(tree)/\(dir)", withIntermediateDirectories: true) }
+    for file in ["a.txt", "sub/b.txt", "node_modules/x/y.js", "nested/.git", "locked/c.txt"] { FileManager.default.createFile(atPath: "\(tree)/\(file)", contents: Data("x".utf8)) }
+    try? FileManager.default.createSymbolicLink(atPath: "\(tree)/link", withDestinationPath: "\(tree)/a.txt")
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: "\(tree)/locked")
+    let walked = DiskScanner.files(in: tree, limit: 400)?.sorted()
+    check(walked == ["a.txt", "locked/c.txt", "nested/.git", "sub/b.txt"], "the walk skips links and dependencies and lists a .git: \(walked ?? [])")
+    check(DiskScanner.files(in: tree, limit: 2) == nil, "and gives up past its limit")
+    try? FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: "\(tree)/locked")
+    check(DiskScanner.files(in: tree, limit: 400) == nil, "and when a folder inside can't be read")
+    try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: "\(tree)/locked")
+    try? FileManager.default.removeItem(atPath: tree)
     check(DiskScanner.worktreeProject("/Users/me/p/.claude/worktrees/a1") == "/Users/me/p" && DiskScanner.worktreeProject("/Users/me/p/a1") == nil,
           "a worktree's project is the folder that holds .claude/worktrees")
     check(knows(more, "know:worktrees-dirty:") && !offers(more, "know:worktrees-dirty:") && row(more, "know:worktrees-dirty:")?.link?.title == Copy.showFolder,
@@ -831,6 +858,22 @@ func runSelfTest() {
     check(Safety.refusal(Fixtures.proc(7100, 1, "WhatsApp", path: "/Applications/WhatsApp.app/Contents/MacOS/WhatsApp", ago: 100), app: Fixtures.app(7100, "net.whatsapp.WhatsApp", "WhatsApp"),
                          in: last, history: pressed, keep: [], tuning: t, strict: false) == Copy.refusedEssential, "or one you rely on")
     check(Safety.system("/usr/bin/caffeinate") == false && Safety.system("/usr/bin/ssh-agent") && Safety.system("/System/Library/x"), "only stateless system tools may be stopped")
+
+    print("tools")
+    func runTool(_ path: String, _ args: [String], timeout: TimeInterval) -> (result: Shell.Result?, took: TimeInterval) {
+        let started = Date()
+        let done = DispatchSemaphore(value: 0)
+        let box = ShellBox()
+        Task.detached { box.result = await Shell.run(path, args, timeout: timeout); done.signal() }
+        done.wait()
+        return (box.result, Date().timeIntervalSince(started))
+    }
+    let echo = runTool("/bin/sh", ["-c", "echo hi"], timeout: 5)
+    check(echo.result?.status == 0 && echo.result?.out == "hi\n", "a tool's output comes back")
+    let hung = runTool("/bin/sleep", ["30"], timeout: 1)
+    check(hung.result == nil && hung.took < 3, "a tool past its timeout comes back as unknown, on time: \(hung.took)")
+    let held = runTool("/bin/sh", ["-c", "sleep 4 & echo hi"], timeout: 1)
+    check(held.result == nil && held.took < 3, "so does one whose own child keeps its output open: \(held.took)")
 
     print("wording")
     check(Format.size(1300 << 20) == "1.3 GB" && Format.size(900 << 20) == "900 MB" && Format.size(22 << 30) == "22 GB" && Format.size(9 << 30) == "9 GB",

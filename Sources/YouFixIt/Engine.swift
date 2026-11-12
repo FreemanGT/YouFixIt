@@ -63,8 +63,10 @@ final class Engine {
     private(set) var keep: [String: String] = [:]           // keepKey → name
     private(set) var kept: Kept?
     private(set) var spike = Spike()
-    /// The Good to know row whose button is running. One at a time, and never while Tidy up runs.
+    /// The Good to know row whose button is running, or `undoing`. One at a time, and never while Tidy up runs.
     private(set) var acting: String?
+    /// What `acting` holds while an Undo puts things back, so nothing else starts meanwhile.
+    nonisolated static let undoing = "undo"
     /// What a Good to know button did, shown on its row for a minute in place of the button.
     private(set) var knowOutcome: [String: Outcome] = [:]
     private(set) var acted: Acted?
@@ -324,9 +326,12 @@ final class Engine {
 
     func undo() async {
         guard canUndo, acting == nil, !isWorking else { return }
+        acting = Self.undoing
+        defer { acting = nil }
         let records = undoRecords
-        // The user took these back, so they are not suggested again for a day.
-        let undone = result?.rows.filter { $0.outcome == .done }.map(\.id) ?? []
+        // The user took these back, so they are not suggested again for a day (set first: a scan may land meanwhile).
+        let until = Date().addingTimeInterval(86_400)
+        for row in result?.rows ?? [] where row.outcome == .done { skipUntil[row.id] = until }
         undoRecords = []
         undoUntil = nil
         result = nil
@@ -337,8 +342,6 @@ final class Engine {
                 any = true
             }
         }
-        let until = Date().addingTimeInterval(86_400)
-        for id in undone { skipUntil[id] = until }
         if any || mock { Sound.play(.undo) }
         updateMood()
         if mock { recompute() } else { scanNow() }
@@ -399,10 +402,13 @@ final class Engine {
 
     func undoAct() async {
         guard acting == nil, !isWorking, let line = acted, line.undoable else { return }
+        acting = Self.undoing
+        defer { acting = nil }
         let records = actUndo
         actUndo = []
         acted = nil
         knowOutcome[line.id] = nil
+        skipUntil[line.id] = Date().addingTimeInterval(86_400)
         var any = false
         for r in records {
             if await Actions.undo(r) {
@@ -410,7 +416,6 @@ final class Engine {
                 any = true
             }
         }
-        skipUntil[line.id] = Date().addingTimeInterval(86_400)
         if any || mock { Sound.play(.undo) }
         if mock { recompute() } else { scanNow() }
     }

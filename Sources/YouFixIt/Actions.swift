@@ -197,8 +197,9 @@ enum Actions {
         if path.isEmpty || Safety.system(path) || Safety.neverNames.contains((path as NSString).lastPathComponent)
             || t.pid == ProcessInfo.processInfo.processIdentifier { return .refused(Copy.refusedSystem) }
         if let id = NSRunningApplication(processIdentifier: t.pid)?.bundleIdentifier, Safety.essential(id) { return .refused(Copy.refusedEssential) }
-        let names = ([t.pid] + Sampler.treePids(t.pid)).map { Sampler.programName(Sampler.currentPath($0)) }
-        if Safety.shells.contains(Sampler.programName(path)) || names.contains(where: { Safety.terminalHosts.contains($0) }) {
+        let tree = [t.pid] + Sampler.treePids(t.pid)
+        if Safety.shells.contains(Sampler.programName(path))
+            || tree.contains(where: { Safety.terminalHosts.contains(Sampler.programName(Sampler.currentPath($0))) || Sampler.hasTerminal($0) }) {
             return .refused(Copy.refusedTerminal)
         }
         if checkClients, Sampler.liveClients(root: t.pid) > 0 { return .refused(Copy.refusedConnected) }

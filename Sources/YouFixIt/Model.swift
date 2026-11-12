@@ -12,6 +12,7 @@ struct Sample: Sendable {
         let cpu: Double         // fraction of one core since the previous sample (0.25 = 25%); 0 on the first sample
         let footprint: UInt64   // ri_phys_footprint for our own processes, resident size for others
         let diskIO: UInt64      // bytes read plus written so far (rusage); 0 for other users' processes
+        var tty = false         // has a controlling terminal: part of someone's terminal session
     }
 
     struct App: Sendable {

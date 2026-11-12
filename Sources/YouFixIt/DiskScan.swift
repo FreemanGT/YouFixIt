@@ -174,12 +174,12 @@ enum DiskScanner {
     }
 
     /// Ignored folders that tools build again (dependencies, build output, caches, generated code), and ignored files nobody
-    /// misses, Claude's own preview settings among them.
+    /// misses, Claude's own preview settings among them. Not tmp or out: notes and rendered files live there too.
     nonisolated static let regrows: Set<String> = [
         "node_modules", ".next", ".nuxt", ".svelte-kit", ".turbo", ".vercel", ".expo", ".parcel-cache", ".cache", ".wrangler", ".astro",
-        ".angular", ".docusaurus", "dist", "build", ".build", "out", "target", "coverage", "storybook-static", "playwright-report",
+        ".angular", ".docusaurus", "dist", "build", ".build", "target", "coverage", "storybook-static", "playwright-report",
         "test-results", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", "venv", ".tox", "Pods", "DerivedData",
-        ".gradle", ".dart_tool", "vendor", "tmp", "log", "logs", "generated", "__generated__",
+        ".gradle", ".dart_tool", "vendor", "log", "logs", "generated", "__generated__",
     ]
     nonisolated static let throwaway: Set<String> = [".DS_Store", "settings.local.json", "next-env.d.ts", ".eslintcache"]
 
@@ -194,7 +194,8 @@ enum DiskScanner {
 
     /// What `git status --porcelain -z --ignored` shows living only in this worktree. A change, a staged file or one git
     /// does not track is work. An ignored file is local (an .env, a scratch folder) unless it is disposable or the main
-    /// checkout has the same file (`isCopy`). An ignored folder is looked into: `inside` lists its files, nil when too many.
+    /// checkout has the same file (`isCopy`). An ignored folder is looked into: `inside` lists its files, nil when it is
+    /// too big or can't be read, and then nobody can vouch for it. Another worktree or repository inside is work too.
     nonisolated static func keeps(_ status: String, isCopy: (String) -> Bool, inside: (String) -> [String]?) -> DiskScan.Keeps {
         var found = DiskScan.Keeps.nothing
         for entry in status.split(separator: "\0").map(String.init) where !entry.isEmpty {
@@ -202,8 +203,11 @@ enum DiskScanner {
             let raw = String(entry.dropFirst(3))
             let path = raw.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
             if disposable(path) || isCopy(path) { continue }
-            if raw.hasSuffix("/"), let files = inside(path),
-               files.allSatisfy({ disposable("\(path)/\($0)") || isCopy("\(path)/\($0)") }) { continue }
+            if raw.hasSuffix("/") {
+                guard let files = inside(path) else { return .work }
+                if files.contains(where: { $0.split(separator: "/").contains(".git") }) { return .work }
+                if files.allSatisfy({ disposable("\(path)/\($0)") || isCopy("\(path)/\($0)") }) { continue }
+            }
             found = .local
         }
         return found
@@ -212,7 +216,12 @@ enum DiskScanner {
     /// What lives only in the worktree. Any failure counts as work.
     nonisolated static func keeps(_ worktree: String, project: String) async -> DiskScan.Keeps {
         guard let git, let r = await Shell.run(git, ["-C", worktree, "--no-optional-locks", "status", "--porcelain", "-z",
-                                                     "--untracked-files=normal", "--ignored"], timeout: 90), r.status == 0 else { return .work }
+                                                     "--untracked-files=normal", "--ignored", "--ignore-submodules=none"], timeout: 90),
+              r.status == 0 else { return .work }
+        // Files git was told to stop looking at (assume-unchanged, skip-worktree, a sparse checkout) can hide edits from status.
+        guard let tracked = await Shell.run(git, ["-C", worktree, "--no-optional-locks", "ls-files", "-v", "-z"], timeout: 60),
+              tracked.status == 0 else { return .work }
+        if tracked.out.split(separator: "\0").contains(where: { $0.first.map { $0.isLowercase || $0 == "S" } ?? false }) { return .work }
         let fm = FileManager.default
         return keeps(r.out, isCopy: { path in
             var isDir: ObjCBool = false
@@ -222,19 +231,31 @@ enum DiskScanner {
         }, inside: { files(in: "\(worktree)/\($0)", limit: 400) })
     }
 
-    /// The files under a folder, relative to it, without following links or entering folders that regrow; nil past `limit`.
+    /// The files under a folder, relative to it, without following links or entering folders that regrow. A `.git` (another
+    /// worktree or repository) is listed as itself. nil past `limit`, or when any part can't be read.
     nonisolated static func files(in folder: String, limit: Int) -> [String]? {
-        guard let walker = FileManager.default.enumerator(atPath: folder) else { return nil }
+        let fm = FileManager.default
+        guard fm.isReadableFile(atPath: folder), fm.isExecutableFile(atPath: folder), let walker = fm.enumerator(atPath: folder) else { return nil }
         var out: [String] = []
         while let rel = walker.nextObject() as? String {
-            let type = walker.fileAttributes?[.type] as? FileAttributeType
-            if type == .typeDirectory {
-                if regrows.contains((rel as NSString).lastPathComponent) { walker.skipDescendants() }
-                continue
+            guard let type = walker.fileAttributes?[.type] as? FileAttributeType else { return nil }
+            let name = (rel as NSString).lastPathComponent
+            switch type {
+            case .typeDirectory:
+                if name == ".git" {
+                    out.append(rel)
+                    walker.skipDescendants()
+                } else if regrows.contains(name) {
+                    walker.skipDescendants()
+                } else if !fm.isReadableFile(atPath: "\(folder)/\(rel)") || !fm.isExecutableFile(atPath: "\(folder)/\(rel)") {
+                    return nil
+                }
+            case .typeRegular:
+                out.append(rel)
+                if out.count > limit { return nil }
+            default:
+                continue        // a link holds no data of its own, nor does a socket or a pipe
             }
-            guard type == .typeRegular else { continue }     // a link holds no data of its own
-            out.append(rel)
-            if out.count > limit { return nil }
         }
         return out
     }
