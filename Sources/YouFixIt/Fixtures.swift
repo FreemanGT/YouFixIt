@@ -14,7 +14,10 @@ enum Fixtures {
         var args: [pid_t: [String]] = [:]
         var cwd: [pid_t: String] = [:]
         var listening: Set<pid_t> = []
-        var established: [pid_t: Int] = [:]
+        var ports: [pid_t: [Int]] = [:]
+        var clients: [pid_t: Int] = [:]
+        var assertions: [Sample.Assertion] = []
+        var quietSince: [pid_t: Date] = [:]
         var containersIdle: [String: Bool] = [:]
         var frontmost: pid_t = 0
         var pressure = 1
@@ -55,7 +58,8 @@ enum Fixtures {
                 children[p.ppid, default: []].append(p.pid)
             }
             return Sample(at: at, procs: procs, children: children, apps: spec.apps, sims: spec.sims, jobs: spec.jobs,
-                          args: spec.args, cwd: spec.cwd, listening: spec.listening, established: spec.established, containersIdle: spec.containersIdle,
+                          args: spec.args, cwd: spec.cwd, listening: spec.listening, ports: spec.ports, clients: spec.clients, containersIdle: spec.containersIdle,
+                          assertions: spec.assertions, quietSince: spec.quietSince,
                           frontmost: spec.frontmost, fullscreen: false,
                           cpuBusy: spec.cpuBusy, load1: spec.load1, cores: 16, memUsed: spec.memUsed, memTotal: 48 << 30,
                           compressed: spec.compressed, swapUsed: spec.swap, pressure: spec.pressure, thermal: spec.thermal,
@@ -201,6 +205,81 @@ enum Fixtures {
         return s
     }
 
+    /// `npm exec next dev --port 3120` from a finished worktree session, as it really runs: the npm root adopted by launchd,
+    /// `next dev` under it, next-server listening on 3120 and a worker it talks to over loopback (not a client).
+    static var nextOrphan: Spec {
+        var s = quiet
+        let node = "/Users/me/.nvm/versions/node/v22/bin/node"
+        s.procs += [
+            proc(3100, 1, "node", path: node, ago: 400_000, mb: 7),
+            proc(3101, 3100, "node", path: node, ago: 400_000, mb: 7),
+            proc(3102, 3101, "node", path: node, ago: 399_990, mb: 5800),
+            proc(3103, 3102, "node", path: node, ago: 399_000, mb: 400),
+        ]
+        s.args[3100] = ["npm exec next dev --port 3120"]
+        s.cwd[3100] = "/Users/me/Ai Projects/Real Woo AI/.claude/worktrees/agent-afe14/platform/app"
+        s.listening = [3102]
+        s.ports = [3102: [3120]]
+        return s
+    }
+
+    /// Twenty-two `php -S` servers a store tool left behind, 40 MB each, plus a Jupyter notebook server.
+    static var phpSwarm: Spec {
+        var s = quiet
+        for i in 0..<22 {
+            let pid = pid_t(4000 + i)
+            s.procs.append(proc(pid, 1, "php", path: "/opt/homebrew/Cellar/php/8.4.1/bin/php", ago: 200_000, mb: 40))
+            s.args[pid] = ["php", "-S", "127.0.0.1:\(8900 + i)", "-t", "stores/site\(i)/source"]
+            s.cwd[pid] = "/Users/me/Ai Projects/Real Woo AI"
+            s.listening.insert(pid)
+            s.ports[pid] = [8900 + i]
+        }
+        s.procs.append(proc(4100, 1, "python3", path: "/opt/homebrew/bin/python3", ago: 90_000, mb: 600))
+        s.args[4100] = ["python3", "-m", "jupyter", "lab", "--port", "8888"]
+        s.listening.insert(4100)
+        s.ports[4100] = [8888]
+        return s
+    }
+
+    /// A mysqld a store tool started by hand and left: parent launchd, no launchd job, its config under ~/.cache.
+    static var mysqlOrphan: Spec {
+        var s = quiet
+        s.procs.append(proc(4500, 1, "mysqld", path: "/opt/homebrew/opt/mysql@8.0/bin/mysqld", ago: 340_000, mb: 780))
+        s.args[4500] = ["mysqld", "--defaults-file=/Users/me/.cache/kli-local/alizab-live-8880/mysql/my.cnf"]
+        return s
+    }
+
+    /// An idle Gradle daemon nothing has built with for hours.
+    static var gradleDaemon: Spec {
+        var s = quiet
+        s.procs.append(proc(4600, 1, "java", path: "/Library/Java/JavaVirtualMachines/temurin-21.jdk/Contents/Home/bin/java", ago: 50_000, mb: 900))
+        s.args[4600] = ["java", "-Xmx2048m", "-cp", "/Users/me/.gradle/wrapper/dists/gradle-8.10/lib/gradle-launcher-8.10.jar",
+                        "org.gradle.launcher.daemon.bootstrap.GradleDaemon", "8.10"]
+        return s
+    }
+
+    /// Who keeps the Mac awake: Vorssaint for 23 hours, a forgotten caffeinate, Claude while it works, powerd, and an app
+    /// that started holding twenty minutes ago.
+    static var sleepBlocker: Spec {
+        var s = quiet
+        s.procs += [
+            proc(4700, 1, "Vorssaint", path: "/Applications/Vorssaint.app/Contents/MacOS/Vorssaint", ago: 90_000, mb: 120),
+            proc(4701, 1, "caffeinate", path: "/usr/bin/caffeinate", ago: 20_000, mb: 1),
+            proc(4702, 1, "Amphetamine", path: "/Applications/Amphetamine.app/Contents/MacOS/Amphetamine", ago: 5000, mb: 50),
+            proc(90, 1, "powerd", path: "/System/Library/CoreServices/powerd.bundle/powerd", uid: 0, ago: 30_000),
+        ]
+        s.apps += [app(4700, "com.example.vorssaint", "Vorssaint", accessory: true), app(4702, "com.if.Amphetamine", "Amphetamine", accessory: true)]
+        func hold(_ pid: pid_t, _ type: String, _ ago: TimeInterval) -> Sample.Assertion {
+            Sample.Assertion(pid: pid, type: type, name: "held", since: now.addingTimeInterval(-ago))
+        }
+        s.assertions = [
+            hold(4700, "PreventUserIdleSystemSleep", 23 * 3600), hold(4700, "PreventUserIdleDisplaySleep", 23 * 3600),
+            hold(4701, "PreventUserIdleSystemSleep", 5 * 3600), hold(2646, "PreventUserIdleSystemSleep", 2 * 3600),
+            hold(90, "PreventSystemSleep", 8 * 3600), hold(4702, "PreventUserIdleSystemSleep", 1200),
+        ]
+        return s
+    }
+
     /// Everything at once, for the UI.
     static var heavy: Spec {
         var s = freeflowIdle
@@ -222,6 +301,11 @@ enum Fixtures {
         s.jobs.merge(brewServices.jobs) { a, _ in a }
         s.procs += menuBarApps.procs.filter { $0.pid >= 8200 && $0.pid < 8300 }
         s.apps.append(contentsOf: menuBarApps.apps)
+        s.procs += mysqlOrphan.procs.filter { $0.pid == 4500 }
+        s.args.merge(mysqlOrphan.args) { a, _ in a }
+        s.procs += sleepBlocker.procs.filter { $0.pid == 4700 }
+        s.apps.append(contentsOf: sleepBlocker.apps.filter { $0.pid == 4700 })
+        s.assertions = sleepBlocker.assertions.filter { $0.pid == 4700 }
         s.procs += [proc(400, 1, "mds_stores", path: "/System/Library/Frameworks/CoreServices.framework/Frameworks/Metadata.framework/Versions/A/Support/mds_stores", uid: 0, ago: 30_000, cpu: 0.25, mb: 600)]
         s.pressure = 2
         s.load1 = 175
@@ -237,6 +321,34 @@ enum Fixtures {
             DiskScan.Item(kind: .orphanCache, path: "/Users/me/Library/Caches/com.example.goneapp", name: "com.example.goneapp", bytes: 600 << 20, modified: nil),
             DiskScan.Item(kind: .devCache, path: "/Users/me/Library/Caches/pip", name: "pip cache", bytes: 8 << 20, modified: nil),
             DiskScan.Item(kind: .otherCache, path: "/Users/me/.cache/huggingface", name: "huggingface cache", bytes: 20 << 30, modified: nil),
+            DiskScan.Item(kind: .worktree, path: "\(worktrees)/agent-a1", name: "agent-a1", bytes: 26 << 30, modified: nil, owner: project, state: .finished),
+            DiskScan.Item(kind: .worktree, path: "\(worktrees)/agent-a2", name: "agent-a2", bytes: 16 << 30, modified: nil, owner: project, state: .finished),
+            DiskScan.Item(kind: .npx, path: "/Users/me/.npm/_npx/0a1b2c", name: "0a1b2c", bytes: 5600 << 20, modified: nil),
+            DiskScan.Item(kind: .trash, path: "/Users/me/.Trash", name: "Trash", bytes: 3100 << 20, modified: nil),
+        ], unavailableSims: 0, freeBytes: 255 << 30, totalBytes: 926 << 30)
+    }
+
+    static let project = "/Users/me/Ai Projects/Real Woo AI"
+    static let worktrees = "\(project)/.claude/worktrees"
+
+    /// Every newer disk kind: worktrees in each state, npx, Claude's scratch folders, a big app cache, an old simulator.
+    static var diskMore: DiskScan {
+        func item(_ kind: DiskScan.Kind, _ path: String, _ mb: UInt64, busy: Bool = false, owner: String? = nil, state: DiskScan.Worktree? = nil) -> DiskScan.Item {
+            DiskScan.Item(kind: kind, path: path, name: (path as NSString).lastPathComponent, bytes: mb << 20, modified: nil, busy: busy, owner: owner, state: state)
+        }
+        return DiskScan(at: now, items: [
+            item(.worktree, "\(worktrees)/agent-a1", 900, owner: project, state: .finished),
+            item(.worktree, "\(worktrees)/agent-a2", 700, owner: project, state: .finished),
+            item(.worktree, "\(worktrees)/agent-a3", 800, owner: project, state: .finished),
+            item(.worktree, "\(worktrees)/brand-b1", 800, owner: project, state: .unmerged),
+            item(.worktree, "\(worktrees)/fix-c1", 600, owner: project, state: .dirty),
+            item(.npx, "/Users/me/.npm/_npx/0a1b", 400),
+            item(.npx, "/Users/me/.npm/_npx/2c3d", 300),
+            item(.npx, "/Users/me/.npm/_npx/4e5f", 900, busy: true),
+            item(.claudeTemp, "/private/tmp/claude-501/-Users-me-Saves/s1", 700),
+            DiskScan.Item(kind: .appCache, path: "/Users/me/Library/Caches/com.spotify.client", name: "Spotify", bytes: 4700 << 20, modified: nil, owner: "com.spotify.client"),
+            DiskScan.Item(kind: .runtime, path: "com.apple.CoreSimulator.SimRuntime.iOS-17-5", name: "iOS 17.5", bytes: 7 << 30, modified: nil),
+            DiskScan.Item(kind: .oldDevice, path: "0F2C9A51-OLD", name: "iPhone 12", bytes: 2 << 30, modified: nil),
         ], unavailableSims: 0, freeBytes: 255 << 30, totalBytes: 926 << 30)
     }
 
@@ -259,6 +371,11 @@ enum Fixtures {
         case "brewServices": brewServices
         case "menuBarApps": menuBarApps
         case "busyProgram": busyProgram
+        case "nextOrphan": nextOrphan
+        case "phpSwarm": phpSwarm
+        case "mysqlOrphan": mysqlOrphan
+        case "gradleDaemon": gradleDaemon
+        case "sleepBlocker": sleepBlocker
         case "heavy": heavy
         case "calm": quiet
         default: nil
@@ -281,6 +398,8 @@ func runSelfTest() {
     }
     func acts(_ f: [Finding]) -> [String] { f.filter(\.actionable).map(\.id).sorted() }
     func knows(_ f: [Finding], _ prefix: String) -> Bool { f.contains { !$0.actionable && $0.id.hasPrefix(prefix) } }
+    func offers(_ f: [Finding], _ prefix: String) -> Bool { f.contains { $0.offer && $0.id.hasPrefix(prefix) } }
+    func row(_ f: [Finding], _ prefix: String) -> Finding? { f.first { $0.id.hasPrefix(prefix) } }
 
     print("simulator")
     let sim = ids(Fixtures.simIdle)
@@ -309,11 +428,79 @@ func runSelfTest() {
     check(acts(ids(Fixtures.expoOrphan) { _, s in s.jobs[36644] = "com.example.job" }).isEmpty, "a launchd job is not an orphan")
     check(acts(ids(Fixtures.expoOrphan) { _, s in s.procs = s.procs.map { $0.pid == 36644 ? Fixtures.proc(36644, 1, "node", path: "/Applications/Stremio.app/Contents/MacOS/node", ago: 10_800, mb: 300) : $0 } }).isEmpty, "node inside an app bundle belongs to that app")
     let watcher = ids(Fixtures.expoOrphan) { _, s in s.listening = [] }
-    check(acts(watcher).isEmpty && knows(watcher, "know:leftover-watcher:36644"), "no listening socket, no server: a watcher is explained only")
-    let connected = ids(Fixtures.expoOrphan) { _, s in s.established = [36677: 1] }
-    check(acts(connected).isEmpty && knows(connected, "know:leftover-server:36644"), "a server something is connected to is explained, not stopped")
+    check(acts(watcher).isEmpty && offers(watcher, "know:leftover-watcher:36644"), "no listening socket, no server: a watcher is offered a Stop, never selected")
+    let connected = ids(Fixtures.expoOrphan) { _, s in s.clients = [36677: 1] }
+    check(acts(connected).isEmpty && offers(connected, "know:leftover-server:36644"), "a server something is connected to is offered a Stop, never selected")
     let py = ids(Fixtures.expoOrphan) { _, s in s.procs = s.procs.map { $0.pid == 36644 ? Fixtures.proc(36644, 1, "python3", ago: 10_800, mb: 900) : $0 } }
-    check(acts(py).isEmpty && knows(py, "know:leftover:36644"), "a python leftover is explained, not stopped")
+    check(acts(py).count == 1 && acts(py)[0].hasPrefix("orphan:36644:"), "a python server nobody uses is a row too: \(acts(py))")
+    let pyScript = ids(Fixtures.expoOrphan) { _, s in
+        s.listening = []
+        s.procs = s.procs.map { $0.pid == 36644 ? Fixtures.proc(36644, 1, "python3", ago: 10_800, mb: 900) : $0 }
+    }
+    check(acts(pyScript).isEmpty && offers(pyScript, "know:leftover:36644"), "a python program serving nothing is offered a Stop")
+
+    print("leftover servers")
+    let next = ids(Fixtures.nextOrphan)
+    let nextRow = row(next, "orphan:3100:")
+    check(acts(next).count == 1 && nextRow?.name == "next dev" && (nextRow?.bytes ?? 0) == 6214 << 20,
+          "next dev whose only connections are its own workers is a Tidy up row: \(acts(next)) \(nextRow?.name ?? "")")
+    check(nextRow?.why == "Port 3120 in Real Woo AI, from a finished coding session", "its why line names the port and the project: \(nextRow?.why ?? "")")
+    let nextUsed = ids(Fixtures.nextOrphan) { _, s in s.clients = [3102: 1] }
+    check(acts(nextUsed).isEmpty && offers(nextUsed, "know:leftover-server:3100"), "a browser connected to it makes it a Good to know row with Stop")
+    let loopback: [pid_t: Sampler.Sockets] = [
+        3102: Sampler.Sockets(listening: [3120], connections: [.init(local: 3120, foreign: 50_001, loopback: true), .init(local: 50_500, foreign: 5432, loopback: true)]),
+        3103: Sampler.Sockets(listening: [], connections: [.init(local: 50_001, foreign: 3120, loopback: true)]),
+    ]
+    check(Sampler.clients(loopback).isEmpty, "its own worker and its own trip to a database are not clients")
+    var browsed = loopback
+    browsed[3102]?.connections.append(.init(local: 3120, foreign: 51_000, loopback: true))
+    browsed[3102]?.connections.append(.init(local: 3120, foreign: 443, loopback: false))
+    check(Sampler.clients(browsed) == [3102: 2], "a browser tab on this Mac and a phone on the network are: \(Sampler.clients(browsed))")
+    let php = ids(Fixtures.phpSwarm)
+    let group = row(php, "orphans:small")
+    if case .sigtermAll(let targets) = group?.action {
+        check(targets.count == 22 && group?.bytes == 880 << 20 && group?.name == "22 leftover servers", "22 small php servers share one row: \(targets.count) \(group?.name ?? "")")
+    } else {
+        check(false, "22 small php servers share one row")
+    }
+    check(group?.why == "Ports 8900 to 8921, from finished coding sessions", "the shared row names the ports: \(group?.why ?? "")")
+    if case .sigtermAll(let targets) = row(ids(Fixtures.phpSwarm) { _, s in s.clients = [4005: 1] }, "orphans:small")?.action {
+        check(targets.count == 21 && !targets.contains { $0.pid == 4005 }, "one with a client is left out of the group")
+    } else {
+        check(false, "one with a client is left out of the group")
+    }
+    check(!acts(php).contains { $0.contains("4100") } && offers(php, "know:leftover-server:4100") && row(php, "know:leftover-server:4100")?.why == Copy.notebook,
+          "a notebook server is never a Tidy up row")
+    let site = Fixtures.history(Fixtures.phpSwarm).last!
+    check(Rules.place(of: site.procs[4000]!, in: site) == "site0" && Rules.serverKey(site.procs[4000]!, in: site) == "server:/Users/me/Ai Projects/Real Woo AI/stores/site0/source",
+          "a relative document root is read against the working directory: \(Rules.place(of: site.procs[4000]!, in: site) ?? "nil")")
+    check(Rules.serverName(["php", "-S", "127.0.0.1:8902", "-t", "x"], fallback: "php") == "php -S :8902"
+          && Rules.serverName(["node", "/opt/homebrew/bin/npm", "run", "dev"], fallback: "node") == "npm run dev"
+          && Rules.serverName(["npx", "vite"], fallback: "node") == "vite",
+          "launchers read as what they run")
+
+    print("databases and build daemons")
+    let db = ids(Fixtures.mysqlOrphan)
+    let dbRow = row(db, "know:db:4500:")
+    check(acts(db).isEmpty && dbRow?.offer == true && dbRow?.action == .sigterm(pid: 4500, start: Fixtures.now.addingTimeInterval(-340_000)),
+          "a leftover mysqld is offered a Stop, never selected: \(db.map(\.id))")
+    check(dbRow?.why.contains("alizab-live-8880") == true, "it names the project its data belongs to: \(dbRow?.why ?? "")")
+    let dbJob = ids(Fixtures.mysqlOrphan) { _, s in s.jobs[4500] = "homebrew.mxcl.mysql@8.0" }
+    check(!knows(dbJob, "know:db:") && acts(dbJob) == ["brew:mysql@8.0"], "one launchd runs is a Homebrew service instead: \(acts(dbJob))")
+    check(!knows(ids(Fixtures.mysqlOrphan) { _, s in s.clients = [4500: 1] }, "know:db:"), "one with a client is not mentioned")
+    let gradle = ids(Fixtures.gradleDaemon)
+    check(acts(gradle).count == 1 && acts(gradle)[0].hasPrefix("daemon:4600:") && row(gradle, "daemon:4600:")?.name == "Gradle daemon" && !knows(gradle, "know:leftover"),
+          "an idle Gradle daemon is a Tidy up row, and only that: \(gradle.map(\.id))")
+    check(acts(ids(Fixtures.gradleDaemon) { _, s in s.procs = s.procs.map { $0.pid == 4600 ? Fixtures.proc(4600, 1, "java", path: $0.path, ago: 50_000, cpu: 0.6, mb: 900) : $0 } }).isEmpty,
+          "a building one is not")
+
+    print("sleep")
+    let awake = ids(Fixtures.sleepBlocker)
+    let vorssaint = row(awake, "know:awake:com.example.vorssaint")
+    check(vorssaint?.offer == true && vorssaint?.why == "Vorssaint has kept your Mac awake for 23 hours, so it can't sleep to save power.",
+          "an app keeping the Mac awake for a day is offered a Quit: \(vorssaint?.why ?? "nil")")
+    check(offers(awake, "know:awake:/usr/bin/caffeinate"), "a forgotten caffeinate is offered a Stop")
+    check(awake.filter { $0.id.hasPrefix("know:awake:") }.count == 2, "Claude, powerd and a twenty-minute hold are not mentioned: \(awake.filter { $0.id.hasPrefix("know:awake:") }.map(\.id))")
 
     print("test browser")
     let chrome = ids(Fixtures.headlessChrome)
@@ -326,10 +513,19 @@ func runSelfTest() {
     let tabs = ids(Fixtures.chrome40)
     check(acts(tabs).isEmpty && knows(tabs, "know:tabs:com.google.Chrome.beta"), "forty tabs are explained, never closed")
     let claude = ids(Fixtures.claude9)
-    check(acts(claude).isEmpty && knows(claude, "know:claude"), "nine Claude sessions are explained, never closed")
+    check(acts(claude).isEmpty && offers(claude, "know:claude"), "nine Claude sessions are offered, never selected")
     let claudeWhy = claude.first { $0.id == "know:claude" }?.why ?? ""
     check(claudeWhy.contains("Saves") && claudeWhy.contains("YouFixIT") && claudeWhy.count < 140, "quiet sessions are named by project folder: \(claudeWhy)")
-    check(ids(Fixtures.claude9) { _, s in s.cwd = [:] }.first { $0.id == "know:claude" }?.why.contains("sidebar frees memory") == true, "without folders the row keeps its plain sentence")
+    check(ids(Fixtures.claude9) { _, s in s.cwd = [:] }.first { $0.id == "know:claude" }?.why.contains("quiet for half an hour") == true, "without folders the row still says some are quiet")
+    let sessions = ids(Fixtures.claude9) { _, s in s.quietSince = [60_000: Fixtures.now.addingTimeInterval(-600)] }.first { $0.id == "know:claude" }
+    if case .endSessions(let targets) = sessions?.action {
+        check(targets.count == 8 && !targets.contains { $0.pid == 60_000 }, "Close quiet ones takes only sessions quiet for half an hour: \(targets.count)")
+    } else {
+        check(false, "the Claude row offers to close quiet sessions")
+    }
+    let allBusy = Dictionary(uniqueKeysWithValues: (0..<9).map { (60_000 + pid_t($0), Fixtures.now.addingTimeInterval(-60)) })
+    let busySessions = ids(Fixtures.claude9) { _, s in s.quietSince = allBusy }.first { $0.id == "know:claude" }
+    check(busySessions?.action == nil && busySessions?.why.contains("sidebar frees memory") == true, "with every session at work there is no button")
     check(claude.first { $0.id == "know:claude" }?.link?.title == Copy.showApp("Claude"), "the Claude row links to Claude")
 
     print("idle app")
@@ -376,7 +572,7 @@ func runSelfTest() {
     check(brew.first { $0.id == "brew:mysql" }?.action == .stopService(formula: "mysql", pid: 8300, start: Fixtures.now.addingTimeInterval(-29_000)), "the stop names the formula and the job root")
     check(!brew.contains { $0.id == "know:brew" } && !knows(brew, "know:brew:"), "managed services are never explained a second time")
     func pg(_ f: [Finding]) -> (row: Bool, know: Bool) { (acts(f).contains("brew:postgresql@16"), knows(f, "know:brew:postgresql@16")) }
-    let pgConnected = ids(Fixtures.brewServices) { _, s in s.established = [8310: 1] }
+    let pgConnected = ids(Fixtures.brewServices) { _, s in s.clients = [8310: 1] }
     check(pg(pgConnected) == (false, true), "a service something is connected to is explained, not stopped")
     let pgClient = ids(Fixtures.brewServices) { _, s in s.procs.append(Fixtures.proc(8312, 8302, "postgres", path: "/opt/homebrew/opt/postgresql@16/bin/postgres", ago: 120, mb: 20)) }
     check(pg(pgClient) == (false, true), "a fresh child is a client on a unix socket: explained, not stopped")
@@ -387,17 +583,31 @@ func runSelfTest() {
     let pgKept = ids(Fixtures.brewServices, keep: ["brew:postgresql@16"])
     check(pg(pgKept) == (false, false) && acts(pgKept) == ["brew:mysql"], "a kept service is never mentioned, the others stay")
     let unmanaged = ids(Fixtures.brewServices) { _, s in s.jobs = [:] }
-    check(acts(unmanaged).isEmpty && unmanaged.contains { $0.id == "know:brew" && $0.why.contains("mysqld") && $0.why.contains("postgres") && $0.why.contains("redis-server") },
-          "brew programs started by hand are explained together: \(unmanaged.filter { $0.id == "know:brew" }.map(\.why))")
+    check(acts(unmanaged).isEmpty && offers(unmanaged, "know:db:8301") && offers(unmanaged, "know:db:8302") && !knows(unmanaged, "know:brewprog"),
+          "databases started by hand are offered a Stop each: \(unmanaged.filter { $0.group == .know }.map(\.id))")
+    let ollama = ids(Fixtures.quiet) { _, s in s.procs.append(Fixtures.proc(8400, 1, "ollama", path: "/opt/homebrew/Cellar/ollama/0.5.7/bin/ollama", ago: 20_000, mb: 2000)) }
+    check(offers(ollama, "know:brewprog:8400") && row(ollama, "know:brewprog:8400")?.why == Copy.brewProgram, "a Homebrew program started by hand gets its own row with Stop")
+    check(!knows(ids(Fixtures.quiet) { _, s in
+        s.procs.append(Fixtures.proc(8400, 1, "ollama", path: "/opt/homebrew/Cellar/ollama/0.5.7/bin/ollama", ago: 20_000, mb: 2000))
+        s.jobs[8400] = "homebrew.mxcl.ollama"
+    }, "know:brewprog"), "one launchd runs is left to the service rules")
 
     print("menu bar apps")
     let bar = ids(Fixtures.menuBarApps)
-    check(acts(bar).isEmpty && bar.contains { $0.id == "know:menubar" && $0.why.contains("Raycast 900 MB") }, "menu bar apps are explained with a size each: \(bar.filter { $0.id == "know:menubar" }.map(\.why))")
-    check(!knows(ids(Fixtures.menuBarApps) { _, s in s.procs = s.procs.map { $0.pid == 8201 ? Fixtures.proc(8201, 1, "Raycast", path: $0.path, ago: 20_000, mb: 200) : $0 } }, "know:menubar"), "under a gigabyte and a half is not worth a row")
+    let barRows = bar.filter { $0.id.hasPrefix("know:menubar:") }
+    check(acts(bar).isEmpty && barRows.count == 3 && barRows.allSatisfy { if case .quitApp = $0.action { true } else { false } } && barRows.allSatisfy { $0.undoLabel == Copy.reopen },
+          "each big quiet menu bar app gets its own row with Quit: \(barRows.map(\.id))")
+    check(!knows(ids(Fixtures.menuBarApps) { _, s in s.procs = s.procs.map { $0.pid == 8201 ? Fixtures.proc(8201, 1, "Raycast", path: $0.path, ago: 20_000, mb: 200) : $0 } }, "know:menubar:com.raycast.macos"), "a small one is not mentioned")
+    check(!knows(ids(Fixtures.menuBarApps) { _, s in s.procs = s.procs.map { $0.pid == 8201 ? Fixtures.proc(8201, 1, "Raycast", path: $0.path, ago: 20_000, cpu: 0.2, mb: 900) : $0 } }, "know:menubar:com.raycast.macos"), "a working one is not mentioned")
+    check(!knows(ids(Fixtures.menuBarApps) { _, s in
+        s.procs.append(Fixtures.proc(8204, 1, "Dropbox", path: "/Applications/Dropbox.app/Contents/MacOS/Dropbox", ago: 20_000, mb: 900))
+        s.apps.append(Fixtures.app(8204, "com.getdropbox.dropbox", "Dropbox", accessory: true))
+    }, "know:menubar:com.getdropbox.dropbox"), "an app you rely on is never offered")
 
     print("busy programs")
     let busy = ids(Fixtures.busyProgram)
-    check(acts(busy).isEmpty && knows(busy, "know:busy:9000"), "a java tree at 90% for minutes is explained: \(busy.map(\.id).filter { $0.hasPrefix("know:busy") })")
+    check(acts(busy).isEmpty && offers(busy, "know:busy:9000"), "a java tree at 90% for minutes is offered a Stop: \(busy.map(\.id).filter { $0.hasPrefix("know:busy") })")
+    check(!knows(busy, "know:leftover"), "the busy row is the only row for that process")
     let building = ids(Fixtures.busyProgram) { _, s in
         s.procs.append(Fixtures.proc(9500, 1, "Xcode", path: "/Applications/Xcode.app/Contents/MacOS/Xcode", ago: 20_000, mb: 2000))
         s.procs = s.procs.map { $0.pid == 9000 ? Fixtures.proc(9000, 9500, "java", path: $0.path, ago: 3000, cpu: 0.9, mb: 800) : $0 }
@@ -458,12 +668,85 @@ func runSelfTest() {
     check(heavy.first { $0.id == "know:trash" } == nil || heavy.first { $0.id == "know:trash" }?.link?.url.hasPrefix("file://") == true, "the Trash row opens the Trash")
     check(ids(Fixtures.busyProgram).first { $0.id == "know:busy:9000" }?.link?.title == Copy.activityMonitorLink, "a busy program that is not an app links to Activity Monitor")
 
+    print("worktrees and downloads")
+    let more = ids(Fixtures.simIdle, disk: Fixtures.diskMore) { _, s in s.cwd[60_000] = "\(Fixtures.worktrees)/agent-a3/platform" }
+    let finished = row(more, "worktrees:")
+    if case .trashAll(let targets) = finished?.action {
+        check(finished?.actionable == true && targets.map(\.path) == ["\(Fixtures.worktrees)/agent-a1", "\(Fixtures.worktrees)/agent-a2"] && targets.allSatisfy { $0.check == .worktree },
+              "finished worktrees are one Tidy up row, the one a session sits in left out: \(targets.map(\.path))")
+    } else {
+        check(false, "finished worktrees are one Tidy up row")
+    }
+    check(finished?.name == "Finished worktrees in Real Woo AI" && finished?.bytes == 1600 << 20, "named after the project, sized by what goes: \(finished?.name ?? "") \(finished?.bytes ?? 0)")
+    check(offers(more, "know:worktrees-unmerged:"), "unmerged ones are offered, never selected")
+    check(knows(more, "know:worktrees-dirty:") && !offers(more, "know:worktrees-dirty:") && row(more, "know:worktrees-dirty:")?.link?.title == Copy.showFolder,
+          "ones with uncommitted changes are only explained, with Show in Finder")
+    if case .trashAll(let targets) = row(more, "npx")?.action {
+        check(targets.count == 2 && targets.allSatisfy { $0.check == .unused } && row(more, "npx")?.actionable == true, "old npx downloads are one row, the recently used one left out")
+    } else {
+        check(false, "old npx downloads are one row")
+    }
+    check(row(more, "claude-temp")?.actionable == true, "Claude's old scratch folders are one row")
+    check(offers(more, "know:appcache:com.spotify.client"), "a big app cache is offered while the app is closed")
+    let spotify = ids(Fixtures.simIdle, disk: Fixtures.diskMore) { _, s in
+        s.procs.append(Fixtures.proc(4800, 1, "Spotify", path: "/Applications/Spotify.app/Contents/MacOS/Spotify", ago: 9000, mb: 400))
+        s.apps.append(Fixtures.app(4800, "com.spotify.client", "Spotify"))
+    }
+    check(knows(spotify, "know:appcache:") && !offers(spotify, "know:appcache:"), "and only explained while it runs")
+    check(row(more, "know:runtime:")?.action?.irreversible == true && row(more, "know:device:")?.action?.irreversible == true, "removing a simulator asks first")
+    let ledger = Rules.findings(history: Fixtures.history(Fixtures.quiet), disk: nil, keep: [], tuning: t, trashed: 4 << 30)
+    check(row(ledger, "know:trash")?.action == .emptyTrash && row(ledger, "know:trash")?.bytes == 4 << 30, "what YouFixIt moved to the Trash brings the Trash row")
+    check(Rules.findings(history: Fixtures.history(Fixtures.quiet), disk: Fixtures.disk, keep: [], tuning: t, trashed: 4 << 30).filter { $0.id == "know:trash" }.count == 1,
+          "never two Trash rows")
+    check(row(Rules.findings(history: Fixtures.history(Fixtures.quiet), disk: nil, keep: [], tuning: t, trashed: 100 << 20), "know:trash") == nil, "a little in the Trash is not worth a row")
+
+    print("buttons")
+    let everything = ids(Fixtures.heavy, disk: Fixtures.disk) + ids(Fixtures.simIdle, disk: Fixtures.diskMore) + ids(Fixtures.busyProgram) + ids(Fixtures.mysqlOrphan)
+        + ids(Fixtures.sleepBlocker) + ids(Fixtures.phpSwarm) + ids(Fixtures.expoOrphan) { _, s in s.listening = [] }
+    let withButton = ["know:claude", "know:menubar:", "know:busy:", "know:db:", "know:awake:", "know:cache:", "know:appcache:", "know:trash",
+                      "know:runtime:", "know:device:", "know:worktrees-unmerged:", "know:leftover"]
+    let explainOnly = ["know:tabs:", "know:spotlight", "know:memory", "know:backlog", "know:worktrees-dirty:"]
+    for prefix in withButton {
+        let rows = everything.filter { $0.id.hasPrefix(prefix) }
+        check(!rows.isEmpty && rows.allSatisfy(\.offer), "\(prefix) rows have a button (\(rows.count))")
+    }
+    for prefix in explainOnly {
+        let rows = everything.filter { $0.id.hasPrefix(prefix) }
+        check(!rows.isEmpty && rows.allSatisfy { $0.action == nil }, "\(prefix) rows only explain (\(rows.count))")
+    }
+    check(everything.filter(\.offer).allSatisfy { !$0.actionable }, "a row with a Good to know button is never a Tidy up row")
+    let mock = Engine()
+    mock.startMock(named: "heavy")
+    check(!mock.know.filter(\.offer).isEmpty && mock.selected.allSatisfy { id in mock.findings.first { $0.id == id }?.group != .know }
+          && mock.actionable.allSatisfy { $0.group != .know }, "Good to know rows are never selected or counted")
+
+    print("explicit presses")
+    let pressed = Fixtures.history(Fixtures.freeflowIdle, tweak: exporting(cpu: 0, writing: true))
+    let last = pressed.last!
+    check(Safety.refusal(last.procs[7000]!, app: last.app(7000), in: last, history: pressed, keep: [], tuning: t, strict: false) == nil, "a press skips the busy check")
+    let recent = Fixtures.history(Fixtures.freeflowIdle) { _, s in s.apps = s.apps.map { $0.pid == 7000 ? Fixtures.app(7000, $0.bundleID, $0.name, activatedAgo: 600) : $0 } }
+    check(Safety.refusal(recent.last!.procs[7000]!, app: recent.last!.app(7000), in: recent.last!, history: recent, keep: [], tuning: t, strict: false) == nil, "and the used-within-the-hour check")
+    func pressRefusal(_ tweak: @escaping (Int, inout Fixtures.Spec) -> Void) -> String? {
+        let h = Fixtures.history(Fixtures.freeflowIdle, tweak: tweak)
+        return Safety.refusal(h.last!.procs[7000]!, app: h.last!.app(7000), in: h.last!, history: h, keep: [], tuning: t, strict: false)
+    }
+    check(pressRefusal { _, s in s.frontmost = 7000 } == Copy.refusedInUse, "but never quits the app in front")
+    check(pressRefusal { _, s in s.apps = s.apps.map { $0.pid == 7000 ? Fixtures.app(7000, $0.bundleID, $0.name, modal: true) : $0 } } == Copy.refusedDialog, "or one with a dialog open")
+    check(pressRefusal { _, s in s.apps = s.apps.map { $0.pid == 7000 ? Fixtures.app(7000, $0.bundleID, $0.name, audio: true) : $0 } } == Copy.refusedAudio, "or one playing audio")
+    check(Safety.refusal(Fixtures.proc(7100, 1, "WhatsApp", path: "/Applications/WhatsApp.app/Contents/MacOS/WhatsApp", ago: 100), app: Fixtures.app(7100, "net.whatsapp.WhatsApp", "WhatsApp"),
+                         in: last, history: pressed, keep: [], tuning: t, strict: false) == Copy.refusedEssential, "or one you rely on")
+    check(Safety.system("/usr/bin/caffeinate") == false && Safety.system("/usr/bin/ssh-agent") && Safety.system("/System/Library/x"), "only stateless system tools may be stopped")
+
     print("wording")
     check(Format.size(1300 << 20) == "1.3 GB" && Format.size(900 << 20) == "900 MB" && Format.size(22 << 30) == "22 GB" && Format.size(9 << 30) == "9 GB",
           "sizes read as people say them: \(Format.size(1300 << 20)) \(Format.size(900 << 20)) \(Format.size(22 << 30)) \(Format.size(9 << 30))")
     check(Copy.frees(memory: 3400 << 20, space: 9 << 30) == "Frees about 3.3 GB of memory and 9 GB of space", "button caption: \(Copy.frees(memory: 3400 << 20, space: 9 << 30))")
-    for f in ids(Fixtures.heavy, disk: Fixtures.disk) + ids(Fixtures.busyProgram) {
-        check(!f.why.contains("—") && !f.why.contains("!") && f.why.count < 140, "plain why line for \(f.id) (\(f.why.count))")
+    for f in everything + ids(Fixtures.nextOrphan) + ids(Fixtures.gradleDaemon) + ids(Fixtures.claude9) + ids(Fixtures.brewServices) { _, s in s.jobs = [:] } {
+        check(!f.why.contains("—") && !f.why.contains("!") && f.why.count < 140 && !f.name.contains("—"), "plain why line for \(f.id) (\(f.why.count))")
+    }
+    for action: Finding.Action in [.emptyTrash, .restart, .stopBackup, .deleteRuntime(id: "x"), .endSessions([]), .trashAll([]), .sigtermAll([])] {
+        let line = Copy.acted(action, name: "mysqld", freed: 778 << 20)
+        check(!line.contains("—") && !line.contains("!") && Copy.verb(action).count <= 18, "plain button and done line: \(Copy.verb(action)) / \(line)")
     }
 
     print(failures == 0 ? "selftest passed" : "selftest FAILED: \(failures)")

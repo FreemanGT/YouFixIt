@@ -42,7 +42,7 @@ enum Theme {
 
     // MARK: - Type (digits always monospaced so totals never jitter)
 
-    enum Step { case caption, body, bodyStrong, button, title, hero, badge }
+    enum Step { case caption, body, bodyStrong, button, small, title, hero, badge }
 
     static func font(_ step: Step) -> Font {
         switch step {
@@ -50,6 +50,7 @@ enum Theme {
         case .body: .system(size: 13).monospacedDigit()
         case .bodyStrong: .system(size: 13, weight: .semibold).monospacedDigit()
         case .button: .system(size: 15, weight: .semibold, design: .rounded).monospacedDigit()
+        case .small: .system(size: 12, weight: .semibold, design: .rounded).monospacedDigit()
         case .title: .system(size: 17, weight: .semibold, design: .rounded).monospacedDigit()
         case .hero: .system(size: 24, weight: .semibold, design: .rounded).monospacedDigit()
         case .badge: .system(size: 12, weight: .semibold, design: .rounded).monospacedDigit()
@@ -79,6 +80,7 @@ enum Theme {
     static let check: CGFloat = 18
     static let pillHeight: CGFloat = 44
     static let pillCompact: CGFloat = 32
+    static let pillSmall: CGFloat = 26      // a Good to know button, sized to its words
     static let keyGlyph: CGFloat = 18
     static let keyRadius: CGFloat = 5
     static let faceSize = CGSize(width: 40, height: 32)
@@ -129,20 +131,26 @@ extension View {
 }
 
 /// A full-width capsule: filled with the accent for the one thing to do, tonal for the way back.
+/// `compact` is the small capsule of a Good to know row, as wide as its words.
 struct PillStyle: ButtonStyle {
     var filled = true
     var height = Theme.pillHeight
+    var compact = false
     @Environment(\.isEnabled) private var enabled
 
-    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: height / 2, style: .continuous) }
+    private var tall: CGFloat { compact ? Theme.pillSmall : height }
+    private var shape: RoundedRectangle { RoundedRectangle(cornerRadius: tall / 2, style: .continuous) }
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(Theme.font(.button))
+            .font(Theme.font(compact ? .small : .button))
             .foregroundStyle(filled ? (enabled ? Theme.onAccent : Color.secondary) : Theme.tint)
-            .frame(maxWidth: .infinity)
-            .frame(height: height)
+            .lineLimit(1)
+            .padding(.horizontal, compact ? Theme.gap : 0)
+            .frame(maxWidth: compact ? nil : .infinity)
+            .frame(height: tall)
             .background(shape.fill(filled ? (enabled ? Theme.tint : Theme.card) : Theme.tonal))
+            .opacity(!filled && !enabled ? 0.5 : 1)
             .contentShape(shape)
             .scaleEffect(configuration.isPressed ? 0.98 : 1)
             .animation(.easeOut(duration: Theme.feedback), value: configuration.isPressed)

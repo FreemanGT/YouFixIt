@@ -30,6 +30,14 @@ struct Sample: Sendable {
         let audio: Bool         // CoreAudio reports it is producing output right now
     }
 
+    /// A power assertion that keeps the Mac from sleeping, credited to the process it is held for.
+    struct Assertion: Sendable {
+        let pid: pid_t          // the on-behalf-of process when there is one (runningboardd, coreaudiod hold them for apps)
+        let type: String        // "PreventUserIdleSystemSleep", "NoIdleSleepAssertion", …
+        let name: String
+        let since: Date
+    }
+
     struct Sim: Sendable {
         let udid: String
         let name: String
@@ -47,8 +55,11 @@ struct Sample: Sendable {
     let args: [pid_t: [String]]     // only for candidate pids (our user, parent pid 1)
     let cwd: [pid_t: String]        // working directory, only for Claude coding sessions
     let listening: Set<pid_t>       // candidate pids with a listening TCP socket
-    let established: [pid_t: Int]   // candidate pids with open TCP connections, and how many
+    let ports: [pid_t: [Int]]       // candidate pids: the TCP ports they listen on
+    let clients: [pid_t: Int]       // candidate pids: connections from outside their tree to one of its listening ports
     let containersIdle: [String: Bool]  // VM app bundle id: true when its Docker socket reports no containers
+    let assertions: [Assertion]     // sleep-preventing power assertions, read once a minute
+    let quietSince: [pid_t: Date]   // Claude coding sessions: when their tree last used CPU (or when watching began)
     let frontmost: pid_t
     let fullscreen: Bool            // the frontmost app covers the main display
     let cpuBusy: Double             // 0...1, system wide
@@ -112,6 +123,10 @@ struct Tuning: Sendable {
     var diskMin: UInt64 = 500 << 20       // disk rows under this are not worth a row
     var appMin: UInt64 = 250 << 20        // idle apps under this footprint are left alone
     var busyIO: Double = 1_048_576        // bytes per second of disk traffic that means "working"
+    var orphanAge: TimeInterval = 900     // leftovers: adopted by launchd at least this long ago
+    var sessionQuiet: TimeInterval = 1800 // Claude sessions: no CPU for this long counts as quiet
+    var awakeHold: TimeInterval = 3600    // sleep blockers: held this long before they are mentioned
+    var barAppMin: UInt64 = 400 << 20     // menu bar apps under this footprint are not mentioned
     static let standard = Tuning()
 }
 
@@ -119,13 +134,48 @@ struct Tuning: Sendable {
 struct Finding: Identifiable, Sendable, Equatable {
     enum Group: Sendable { case running, space, know }
 
+    /// One process to signal, pinned by its start time so a reused pid is never hit.
+    struct Target: Sendable, Equatable {
+        let pid: pid_t
+        let start: Date
+        var bytes: UInt64 = 0
+    }
+
+    /// One folder to move to the Trash, what it holds, and what to re-check right before it moves.
+    struct TrashTarget: Sendable, Equatable {
+        enum Check: Sendable, Equatable {
+            case written    // nothing written inside in the last ten minutes
+            case worktree   // a git worktree: still clean, quiet, nothing running inside
+            case unused     // nothing running from it (npx packages)
+        }
+        let path: String
+        let bytes: UInt64
+        let check: Check
+    }
+
     enum Action: Sendable, Equatable {
         case shutdownSim(udid: String)
         case quitApp(pid: pid_t, bundleID: String, url: URL?)
         case sigterm(pid: pid_t, start: Date)
+        case sigtermAll([Target])
+        case endSessions([Target])
         case stopService(formula: String, pid: pid_t, start: Date)
         case trash(path: String)
+        case trashAll([TrashTarget])
         case deleteUnavailableSims
+        case stopBackup
+        case restart
+        case emptyTrash
+        case deleteRuntime(id: String)
+        case deleteDevice(udid: String)
+
+        /// Gone for good once done: asked about once, inline, before it runs.
+        var irreversible: Bool {
+            switch self {
+            case .emptyTrash, .deleteRuntime, .deleteDevice: true
+            default: false
+            }
+        }
     }
 
     let id: String                  // stable across scans: "sim:UDID", "app:bundle", "vm:bundle", "orphan:pid:start", "brew:formula", "path:/…", "know:kind"
@@ -145,7 +195,10 @@ struct Finding: Identifiable, Sendable, Equatable {
         let url: String
     }
 
-    var actionable: Bool { action != nil }
+    /// A Tidy up row: selected by default, counted in the menu bar, part of the mood and the nudge.
+    var actionable: Bool { action != nil && group != .know }
+    /// A Good to know row with a button of its own: never selected, never counted, only done when pressed.
+    var offer: Bool { action != nil && group == .know }
 
     static func == (a: Finding, b: Finding) -> Bool { a.id == b.id && a.bytes == b.bytes && a.why == b.why }
 }
@@ -161,7 +214,10 @@ enum Outcome: Sendable, Equatable {
 
 /// What the disk side knows. Measured slowly and rarely; nil until the first measurement lands.
 struct DiskScan: Sendable {
-    enum Kind: Sendable { case derivedData, deviceSupport, previews, simCache, devCache, otherCache, orphanCache, installer, trash, runtime, oldDevice }
+    enum Kind: Sendable { case derivedData, deviceSupport, previews, simCache, devCache, otherCache, orphanCache, installer, trash, runtime, oldDevice,
+                          worktree, npx, claudeTemp, appCache }
+    /// A Claude worktree that has been quiet for a day with nothing running inside: what its git state allows.
+    enum Worktree: Sendable { case finished, unmerged, dirty }
     struct Item: Sendable {
         let kind: Kind
         let path: String
@@ -169,6 +225,8 @@ struct DiskScan: Sendable {
         let bytes: UInt64
         let modified: Date?
         var busy = false    // something wrote inside it recently (10 min for caches, 30 days for orphan caches)
+        var owner: String? = nil        // worktrees: the project folder; app caches: the app's bundle id
+        var state: Worktree? = nil      // worktrees only
     }
     let at: Date
     let items: [Item]

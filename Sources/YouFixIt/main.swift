@@ -18,12 +18,15 @@ if let i = CommandLine.arguments.firstIndex(of: "--snapshot") {
     NSApplication.shared.run()
 }
 
-/// `--scan [--window N] [--apply ID [--then-undo]]`: sample this Mac and print findings as text.
+/// `--scan [--window N] [--apply ID [--then-undo] [--confirm]]`: sample this Mac and print findings as text.
+/// KNOW+ rows are Good to know rows with a button; `--apply` runs one the way pressing it does (busy and recently used no
+/// longer hold it back). One that can't be undone, and Restart, also need `--confirm`.
 if CommandLine.arguments.contains("--scan") {
     let args = CommandLine.arguments
     let window = args.firstIndex(of: "--window").flatMap { args.count > $0 + 1 ? TimeInterval(args[$0 + 1]) : nil }
     let apply = args.firstIndex(of: "--apply").flatMap { args.count > $0 + 1 ? args[$0 + 1] : nil }
     let thenUndo = args.contains("--then-undo")
+    let confirmed = args.contains("--confirm")
     NSApplication.shared.setActivationPolicy(.accessory)
     Task { @MainActor in
         let engine = Engine()
@@ -31,6 +34,10 @@ if CommandLine.arguments.contains("--scan") {
             engine.tuning.idle = window
             engine.tuning.appIdle = window
             engine.tuning.sustain = min(window, 120)
+            // The other waits keep their proportion to the 600 s idle window.
+            engine.tuning.orphanAge = window * 1.5
+            engine.tuning.sessionQuiet = window * 3
+            engine.tuning.awakeHold = window * 6
         }
         engine.popoverOpen = true   // 5 s cadence
         engine.start()
@@ -40,14 +47,31 @@ if CommandLine.arguments.contains("--scan") {
             try? await Task.sleep(for: .seconds(5))
             let s = engine.latestSample
             let lines = engine.findings.map { f in
-                let kind = f.actionable ? (f.group == .space ? "SPACE" : "ACT  ") : "KNOW "
-                return "  \(kind) \(f.id)  \(f.name)  \(f.why)  \(f.bytes > 0 ? Copy.estimate(f.bytes) : "")"
+                let kind = f.actionable ? (f.group == .space ? "SPACE" : "ACT  ") : (f.offer ? "KNOW+" : "KNOW ")
+                let verb = f.offer ? f.action.map { "  [\(Copy.verb($0))]" } ?? "" : ""
+                return "  \(kind) \(f.id)  \(f.name)  \(f.why)  \(f.bytes > 0 ? Copy.estimate(f.bytes) : "")\(verb)"
             }
             let head = "mood \(engine.mood)  procs \(s?.procs.count ?? 0)  cpu \(Int((s?.cpuBusy ?? 0) * 100))%  load \(Int(s?.load1 ?? 0))  mem \(Format.size(s?.memUsed ?? 0))  compressed \(Format.size(s?.compressed ?? 0))  pressure \(s?.pressure ?? 0)  sims \(s?.sims.count ?? 0)  spike \(engine.spike.active)  history \(Int(Date().timeIntervalSince(started)))s"
             let text = ([head] + lines).joined(separator: "\n")
             if text != lastPrinted {
                 print(text)
                 lastPrinted = text
+            }
+            if let apply, let target = engine.findings.first(where: { $0.id == apply && $0.offer }) {
+                if target.action?.irreversible == true || target.action == .restart, !confirmed {
+                    print("\(target.id) can't be taken back; add --confirm to run it")
+                    exit(1)
+                }
+                print("applying \(target.id) as a Good to know button")
+                await engine.act(target)
+                print("  \(target.name): \(engine.knowOutcome[target.id].map { "\($0)" } ?? "no outcome")")
+                if let line = engine.acted { print("  \(line.text)") }
+                if thenUndo {
+                    try? await Task.sleep(for: .seconds(2))
+                    print("undoing (undoable \(engine.acted?.undoable ?? false))")
+                    await engine.undoAct()
+                }
+                exit(0)
             }
             if let apply, let target = engine.findings.first(where: { $0.id == apply && $0.actionable }) {
                 print("applying \(target.id)")

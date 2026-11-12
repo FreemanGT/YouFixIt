@@ -36,29 +36,39 @@ enum Safety {
         "backupd", "Finder", "Dock", "SystemUIServer", "ControlCenter", "NotificationCenter", "YouFixIt",
     ]
     static let neverPaths = ["/System/", "/usr/", "/sbin/", "/bin/", "/Library/Apple/", "/private/var/"]
+    /// System tools inside a never-path that hold no state of their own, so a Good to know button may stop one of ours.
+    static let signalable: Set<String> = ["/usr/bin/caffeinate"]
     static let keepKey = "keep"
 
     static func essential(_ bundleID: String) -> Bool {
         neverBundles.contains(bundleID) || neverBundlePrefixes.contains { bundleID.hasPrefix($0) }
     }
 
+    /// A process path no button may signal: macOS itself, except the few stateless tools in `signalable`.
+    static func system(_ path: String) -> Bool {
+        neverPaths.contains { path.hasPrefix($0) } && !signalable.contains(path)
+    }
+
     /// nil means the app may act on this process. Otherwise the reason, in plain words.
     /// `history` lets it see whether the process has been working (CPU or disk) over the idle window.
-    static func refusal(_ p: Sample.Proc, app: Sample.App?, in s: Sample, history h: [Sample], keep: Set<String>, tuning: Tuning) -> String? {
+    /// `strict: false` is a press on a Good to know button: the user chose this one, so "busy" and "used within the
+    /// hour" no longer hold it back. Everything else (macOS, other users, essentials, in front, a dialog, audio, Keep) still does.
+    static func refusal(_ p: Sample.Proc, app: Sample.App?, in s: Sample, history h: [Sample], keep: Set<String>, tuning: Tuning,
+                        strict: Bool = true) -> String? {
         if p.uid != Sampler.me { return Copy.refusedSystem }
-        if neverPaths.contains(where: { p.path.hasPrefix($0) }) { return Copy.refusedSystem }
+        if system(p.path) { return Copy.refusedSystem }
         if neverNames.contains(p.name) { return Copy.refusedSystem }
         if p.pid == ProcessInfo.processInfo.processIdentifier { return Copy.refusedSystem }
         if let app {
             if essential(app.bundleID) { return Copy.refusedEssential }
             if app.active || s.frontmost == app.pid { return Copy.refusedInUse }
-            if let last = app.lastActivated, s.at.timeIntervalSince(last) < tuning.appIdle { return Copy.refusedInUse }
+            if strict, let last = app.lastActivated, s.at.timeIntervalSince(last) < tuning.appIdle { return Copy.refusedInUse }
             if app.hasModal { return Copy.refusedDialog }
             if app.audio { return Copy.refusedAudio }
             if keep.contains(app.bundleID) { return Copy.refusedKept }
         }
         if s.frontmost == p.pid { return Copy.refusedInUse }
-        if Rules.avgCPU(p.pid, h, tuning.idle) >= 0.05 || Rules.ioRate(p.pid, h, tuning.idle) >= tuning.busyIO { return Copy.refusedBusy }
+        if strict, Rules.avgCPU(p.pid, h, tuning.idle) >= 0.05 || Rules.ioRate(p.pid, h, tuning.idle) >= tuning.busyIO { return Copy.refusedBusy }
         if keep.contains(p.path) { return Copy.refusedKept }
         return nil
     }

@@ -2,6 +2,7 @@ import CoreAudio
 import CoreGraphics
 import Darwin
 import Foundation
+import IOKit.pwr_mgt
 
 /// Reads the whole machine into a `Sample`. Lives off the main actor; AppKit facts arrive as `AppSeed`s.
 actor Sampler {
@@ -12,10 +13,15 @@ actor Sampler {
     private var simCache: (at: Date, sims: [Sample.Sim])?
     private var vmCache: [String: (at: Date, idle: Bool)] = [:]
     private var jobsCache: (at: Date, jobs: [pid_t: String])?
+    private var assertionCache: (at: Date, list: [Sample.Assertion])?
+    private var lastBusy: [pid_t: (start: Date, at: Date)] = [:]
+    private let began = Date()
 
     static let me = getuid()
     /// Names whose orphans may be dev servers (R3) or other leftovers (G12).
     static let serverNames: Set<String> = ["node", "bun", "deno", "python", "python3", "ruby", "java", "php"]
+    /// Databases a coding session can start and leave behind (B3).
+    static let dbNames: Set<String> = ["mysqld", "mariadbd", "postgres", "redis-server", "valkey-server", "mongod", "memcached"]
     static let browserNames: Set<String> = ["Google Chrome", "Google Chrome Beta", "Google Chrome Canary", "Chromium", "Brave Browser", "Microsoft Edge", "chrome-headless-shell"]
     static let brewPrefixes = ["/opt/homebrew/", "/usr/local/Cellar/", "/usr/local/opt/"]
     /// launchd label prefixes of a Homebrew service (the older and the current naming); the rest is the formula name.
@@ -76,35 +82,50 @@ actor Sampler {
         }
         let appPids = Set(seeds.map(\.pid))
 
-        // 3. Arguments and sockets, only for our own parent-pid-1 processes (orphans, launchd_sim, headless browsers)
-        //    and Homebrew services; the working directory of Claude coding sessions.
+        // 3. Arguments, working directory and sockets, only for our own parent-pid-1 processes (orphans, launchd_sim,
+        //    headless browsers) and Homebrew services; the working directory of Claude coding sessions.
         var args: [pid_t: [String]] = [:]
         var cwd: [pid_t: String] = [:]
         var listening = Set<pid_t>()
-        var established: [pid_t: Int] = [:]
+        var ports: [pid_t: [Int]] = [:]
+        var clients: [pid_t: Int] = [:]
         var orphanCandidates = false
         var brewCandidates = false
         func sockets(under root: pid_t, where test: (Sample.Proc) -> Bool) {
-            // The listener is often a child (npm exec → node), so look through the whole tree.
+            // The listener is often a child (npm exec → node), so look through the whole tree. Clients are judged per
+            // tree, so the tree's processes talking to each other never count as someone using it.
+            var tree: [pid_t: Sockets] = [:]
             var queue = [root]
             while let pid = queue.popLast() {
                 if let q = procs[pid], test(q) {
                     let sock = Self.sockets(pid)
-                    if sock.listening { listening.insert(pid) }
-                    if sock.established > 0 { established[pid] = sock.established }
+                    tree[pid] = sock
+                    if !sock.listening.isEmpty {
+                        listening.insert(pid)
+                        ports[pid] = sock.listening
+                    }
                 }
                 queue.append(contentsOf: children[pid] ?? [])
             }
+            clients.merge(Self.clients(tree)) { $1 }
         }
+        let leftovers = Self.serverNames.union(Self.dbNames)
         for p in procs.values where p.uid == Self.me {
             if p.path.hasSuffix(Self.claudeSession), let dir = Self.cwd(p.pid) { cwd[p.pid] = dir }
             if Self.brewPrefixes.contains(where: { p.path.hasPrefix($0) }) { brewCandidates = true }
+            // A database behind a wrapper (mysqld_safe, a shell) is judged where it runs; a worker of one is part of it.
+            if p.ppid != 1, Self.dbNames.contains(p.name), procs[p.ppid]?.name != p.name {
+                orphanCandidates = true
+                args[p.pid] = Self.args(p.pid)
+                sockets(under: p.pid) { Self.dbNames.contains($0.name) }
+            }
             let browser = Self.browserNames.contains(p.name)
             guard p.ppid == 1 || browser else { continue }
-            if p.name == "launchd_sim" || Self.serverNames.contains(p.name) || browser { args[p.pid] = Self.args(p.pid) }
-            if p.ppid == 1, Self.serverNames.contains(p.name), !appPids.contains(p.pid) {
+            if p.name == "launchd_sim" || leftovers.contains(p.name) || browser { args[p.pid] = Self.args(p.pid) }
+            if p.ppid == 1, leftovers.contains(p.name), !appPids.contains(p.pid) {
                 orphanCandidates = true
-                sockets(under: p.pid) { Self.serverNames.contains($0.name) }
+                if let dir = Self.cwd(p.pid) { cwd[p.pid] = dir }
+                sockets(under: p.pid) { leftovers.contains($0.name) }
             }
             if p.ppid == 1, browser { orphanCandidates = true }
         }
@@ -145,7 +166,34 @@ actor Sampler {
             }
         }
 
-        // 6. The machine.
+        // 6. What keeps the Mac awake, once a minute.
+        let assertions: [Sample.Assertion]
+        if let cached = assertionCache, now.timeIntervalSince(cached.at) < 60 {
+            assertions = cached.list
+        } else {
+            assertions = Self.assertions()
+            assertionCache = (now, assertions)
+        }
+
+        // 7. Claude coding sessions: when each tree last did any work, remembered beyond the fifteen-minute history.
+        //    Until a session has been watched for a while, "quiet" counts from when watching began.
+        var quietSince: [pid_t: Date] = [:]
+        var sessions = Set<pid_t>()
+        for p in procs.values where p.uid == Self.me && p.path.hasSuffix(Self.claudeSession) {
+            sessions.insert(p.pid)
+            var cpu = 0.0
+            var queue = [p.pid]
+            while let pid = queue.popLast() {
+                cpu += procs[pid]?.cpu ?? 0
+                queue.append(contentsOf: children[pid] ?? [])
+            }
+            if cpu >= 0.02 { lastBusy[p.pid] = (p.start, now) }
+            let busy = lastBusy[p.pid].flatMap { $0.start == p.start ? $0.at : nil }
+            quietSince[p.pid] = busy ?? max(p.start, began)
+        }
+        lastBusy = lastBusy.filter { sessions.contains($0.key) }
+
+        // 8. The machine.
         let cpuBusy = systemCPU()
         let mem = Self.memory()
         var load = [Double](repeating: 0, count: 3)
@@ -155,7 +203,8 @@ actor Sampler {
         let fullscreen = front.map { win.fullscreen.contains($0.pid) } ?? false
 
         return Sample(at: now, procs: procs, children: children, apps: apps, sims: sims, jobs: jobs, args: args, cwd: cwd,
-                      listening: listening, established: established, containersIdle: containersIdle, frontmost: frontmost,
+                      listening: listening, ports: ports, clients: clients, containersIdle: containersIdle, assertions: assertions,
+                      quietSince: quietSince, frontmost: frontmost,
                       fullscreen: fullscreen, cpuBusy: cpuBusy, load1: load[0],
                       cores: ProcessInfo.processInfo.activeProcessorCount, memUsed: mem.used,
                       memTotal: ProcessInfo.processInfo.physicalMemory, compressed: mem.compressed, swapUsed: mem.swap,
@@ -176,11 +225,46 @@ actor Sampler {
 
     private func path(_ pid: pid_t, start: TimeInterval) -> String {
         if let cached = pathCache[pid], cached.start == start { return cached.path }
-        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
-        let len = Int(proc_pidpath(pid, &buf, UInt32(buf.count)))
-        let path = len > 0 ? String(decoding: buf.prefix(len).map { UInt8(bitPattern: $0) }, as: UTF8.self) : ""
+        let path = Self.currentPath(pid)
         pathCache[pid] = (start, path)
         return path
+    }
+
+    /// The executable of a process right now; "" when it is gone or unreadable.
+    nonisolated static func currentPath(_ pid: pid_t) -> String {
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        let len = Int(proc_pidpath(pid, &buf, UInt32(buf.count)))
+        return len > 0 ? String(decoding: buf.prefix(len).map { UInt8(bitPattern: $0) }, as: UTF8.self) : ""
+    }
+
+    /// Owner and parent of a process right now; nil when it is gone.
+    nonisolated static func info(_ pid: pid_t) -> (uid: uid_t, ppid: pid_t)? {
+        var bsd = proc_bsdinfo()
+        guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 else { return nil }
+        return (bsd.pbi_uid, pid_t(bsd.pbi_ppid))
+    }
+
+    /// Every process in a process group right now.
+    nonisolated static func groupPids(_ pgid: pid_t) -> [pid_t] {
+        let bytes = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(pgid), nil, 0)
+        guard bytes > 0 else { return [] }
+        var buf = [pid_t](repeating: 0, count: Int(bytes) / MemoryLayout<pid_t>.size + 16)
+        let got = proc_listpids(UInt32(PROC_PGRP_ONLY), UInt32(pgid), &buf, Int32(buf.count * MemoryLayout<pid_t>.size))
+        guard got > 0 else { return [] }
+        return buf.prefix(Int(got) / MemoryLayout<pid_t>.size).filter { $0 > 0 }
+    }
+
+    /// Working directories and command lines of all our processes right now, for "is anything using this folder".
+    nonisolated static func usage() -> (cwds: [String], args: [String]) {
+        var cwds: [String] = []
+        var lines: [String] = []
+        let own = getpid()
+        for pid in pids() where pid != own {
+            guard let i = info(pid), i.uid == Self.me else { continue }
+            if let dir = cwd(pid) { cwds.append(dir) }
+            lines.append(args(pid).joined(separator: " "))
+        }
+        return (cwds, lines)
     }
 
     nonisolated static func shortName(_ bsd: inout proc_bsdinfo) -> String {
@@ -245,26 +329,90 @@ actor Sampler {
         return out
     }
 
-    /// TCP sockets of a process: does it listen (a server), and how many connections are open right now (someone using it).
-    nonisolated static func sockets(_ pid: pid_t) -> (listening: Bool, established: Int) {
+    /// A process's TCP sockets: the ports it listens on, and its open connections.
+    struct Sockets: Sendable {
+        struct Connection: Sendable {
+            let local: Int
+            let foreign: Int
+            let loopback: Bool      // the peer is on this Mac (127.0.0.0/8, ::1, or loopback mapped into IPv6)
+        }
+        var listening: [Int] = []
+        var connections: [Connection] = []
+    }
+
+    nonisolated static func sockets(_ pid: pid_t) -> Sockets {
+        var out = Sockets()
         let bytes = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
-        guard bytes > 0 else { return (false, 0) }
+        guard bytes > 0 else { return out }
         var fds = [proc_fdinfo](repeating: proc_fdinfo(), count: Int(bytes) / MemoryLayout<proc_fdinfo>.size + 16)
         let got = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, &fds, Int32(fds.count * MemoryLayout<proc_fdinfo>.size))
-        guard got > 0 else { return (false, 0) }
-        var listening = false
-        var established = 0
+        guard got > 0 else { return out }
         for fd in fds.prefix(Int(got) / MemoryLayout<proc_fdinfo>.size) where fd.proc_fdtype == UInt32(PROX_FDTYPE_SOCKET) {
             var si = socket_fdinfo()
             guard proc_pidfdinfo(pid, fd.proc_fd, PROC_PIDFDSOCKETINFO, &si, Int32(MemoryLayout<socket_fdinfo>.size)) > 0 else { continue }
             guard si.psi.soi_kind == SOCKINFO_TCP else { continue }
-            switch si.psi.soi_proto.pri_tcp.tcpsi_state {
-            case TSI_S_LISTEN: listening = true
-            case TSI_S_ESTABLISHED: established += 1
+            let tcp = si.psi.soi_proto.pri_tcp
+            let local = port(tcp.tcpsi_ini.insi_lport)
+            switch tcp.tcpsi_state {
+            case TSI_S_LISTEN:
+                if !out.listening.contains(local) { out.listening.append(local) }
+            case TSI_S_ESTABLISHED:
+                out.connections.append(Sockets.Connection(local: local, foreign: port(tcp.tcpsi_ini.insi_fport), loopback: loopback(tcp.tcpsi_ini)))
             default: break
             }
         }
-        return (listening, established)
+        return out
+    }
+
+    /// Ports arrive in network byte order in the low 16 bits.
+    nonisolated static func port(_ raw: Int32) -> Int { Int(UInt16(bigEndian: UInt16(truncatingIfNeeded: raw))) }
+
+    nonisolated static func loopback(_ ini: in_sockinfo) -> Bool {
+        if ini.insi_vflag & UInt8(INI_IPV4) != 0 {
+            return UInt32(bigEndian: ini.insi_faddr.ina_46.i46a_addr4.s_addr) >> 24 == 127
+        }
+        return withUnsafeBytes(of: ini.insi_faddr.ina_6) { b in
+            func zero(_ n: Int) -> Bool { (0..<n).allSatisfy { b[$0] == 0 } }
+            if zero(15), b[15] == 1 { return true }                                         // ::1
+            return zero(10) && b[10] == 0xff && b[11] == 0xff && b[12] == 127               // ::ffff:127.x.x.x
+        }
+    }
+
+    /// Who is using a server tree: connections that arrived on one of the tree's listening ports from a peer outside it.
+    /// A loopback peer whose port belongs to the tree is the tree talking to itself (Next's workers do), and a connection
+    /// on a port the tree does not listen on is one it made (to a database, to the internet). Neither means someone uses it.
+    nonisolated static func clients(_ tree: [pid_t: Sockets]) -> [pid_t: Int] {
+        let listening = Set(tree.values.flatMap(\.listening))
+        let own = listening.union(tree.values.flatMap { $0.connections.map(\.local) })
+        var out: [pid_t: Int] = [:]
+        for (pid, s) in tree {
+            let n = s.connections.filter { listening.contains($0.local) && !($0.loopback && own.contains($0.foreign)) }.count
+            if n > 0 { out[pid] = n }
+        }
+        return out
+    }
+
+    /// The same, read right now for an apply-time re-check: clients anywhere in the tree under `root`.
+    nonisolated static func liveClients(root: pid_t) -> Int {
+        var tree: [pid_t: Sockets] = [:]
+        for pid in treePids(root) { tree[pid] = sockets(pid) }
+        return clients(tree).values.reduce(0, +)
+    }
+
+    /// Sleep-preventing power assertions, credited to the process they are held for.
+    nonisolated static func assertions() -> [Sample.Assertion] {
+        var raw: Unmanaged<CFDictionary>?
+        guard IOPMCopyAssertionsByProcess(&raw) == 0, let dict = raw?.takeRetainedValue() as NSDictionary? else { return [] }
+        var out: [Sample.Assertion] = []
+        for (key, value) in dict {
+            guard let holder = (key as? NSNumber)?.int32Value, let list = value as? [NSDictionary] else { continue }
+            for a in list {
+                guard let type = a["AssertType"] as? String, let since = a["AssertStartWhen"] as? Date else { continue }
+                let owner = (a["AssertionOnBehalfOfPID"] as? NSNumber)?.int32Value ?? holder
+                out.append(Sample.Assertion(pid: owner, type: type, name: a["AssertName"] as? String ?? "", since: since))
+            }
+        }
+        return out
     }
 
     /// True when the Docker socket answers and lists no containers. Any failure counts as "in use".

@@ -35,7 +35,25 @@ enum Copy {
         since.map { "\(runtime), idle since \(Format.clock($0))" } ?? "\(runtime), nothing is using it"
     }
     static func whyIdleApp(since: Date) -> String { "Untouched since \(Format.clock(since))" }
-    static let whyDevServer = "From a finished coding session"
+    /// "Port 3120 in Real Woo AI, from a finished coding session".
+    static func whyDevServer(port: Int?, place: String?) -> String {
+        switch (port, place) {
+        case let (port?, place?): "Port \(port) in \(place), from a finished coding session"
+        case let (port?, nil): "Port \(port), from a finished coding session"
+        case let (nil, place?): "In \(place), from a finished coding session"
+        default: "From a finished coding session"
+        }
+    }
+    static func serverGroup(_ n: Int) -> String { "\(n) leftover servers" }
+    static func whyServerGroup(low: Int?, high: Int?) -> String {
+        switch (low, high) {
+        case let (low?, high?) where low != high: "Ports \(low) to \(high), from finished coding sessions"
+        case let (low?, _): "Port \(low), from finished coding sessions"
+        default: "From finished coding sessions"
+        }
+    }
+    /// "Gradle daemon" reads as "Gradle starts a fresh one on the next build".
+    static func whyDaemon(_ name: String) -> String { "\(name.replacingOccurrences(of: " daemon", with: "")) starts a fresh one on the next build" }
     static let whyTestBrowser = "Left by a script, holds no tabs"
     /// "Google Chrome" reads as "Chrome (test copy)": the brand word only costs room.
     static func testCopy(_ name: String) -> String { "\(name.replacingOccurrences(of: "Google ", with: "")) (test copy)" }
@@ -47,10 +65,19 @@ enum Copy {
     static let whyUnavailableSims = "Their iOS version is gone"
     static let whyIdleVM = "No containers running, nothing using it"
     static let whyServiceIdle = "Nothing is using it. Stays off until you start it again."
+    static func finishedWorktrees(_ project: String) -> String { "Finished worktrees in \(project)" }
+    static func whyFinishedWorktrees(_ n: Int) -> String { n == 1 ? "1 copy whose work is already merged" : "\(n) copies whose work is already merged" }
+    static let npxName = "Old npx downloads"
+    static func whyNpx(_ n: Int) -> String { "\(n == 1 ? "1 package" : "\(n) packages") unused for two weeks, npx fetches them again" }
+    static let claudeTempName = "Claude scratch folders"
+    static func whyClaudeTemp(_ n: Int) -> String { "\(n == 1 ? "1 folder" : "\(n) folders") from sessions that ended days ago" }
     static func estimate(_ bytes: UInt64) -> String { "about \(Format.size(bytes))" }
     static let keep = "Keep"
     static func keepTip(_ name: String) -> String { "Never suggest \(name)" }
     static func kept(_ name: String) -> String { "Won't suggest \(name) again." }
+    static let hide = "Hide"
+    static func hideTip(_ name: String) -> String { "Never mention \(name)" }
+    static func hidden(_ name: String) -> String { "Won't mention \(name) again." }
     static let undo = "Undo"
     static let undoCaption = "You can undo for the next minute."
     static let stillOpen = "Still open"
@@ -71,10 +98,45 @@ enum Copy {
         }
     }
 
+    // Good to know buttons. A trailing "…" means a window or a question comes first.
+    static func verb(_ action: Finding.Action) -> String {
+        switch action {
+        case .quitApp: "Quit"
+        case .shutdownSim: "Shut down"
+        case .sigterm, .sigtermAll, .stopService: "Stop"
+        case .endSessions: "Close quiet ones"
+        case .trash, .trashAll: "Move to Trash"
+        case .deleteUnavailableSims: "Remove"
+        case .stopBackup: "Skip this backup"
+        case .restart: "Restart…"
+        case .emptyTrash: "Empty Trash…"
+        case .deleteRuntime, .deleteDevice: "Remove…"
+        }
+    }
+    /// The filled button of the inline confirm.
+    static func confirmVerb(_ action: Finding.Action) -> String { action == .emptyTrash ? "Empty Trash" : "Remove" }
+    static let cantUndo = "This can't be undone."
+    static let cancel = "Cancel"
+    /// The line under Good to know after a button did its work.
+    static func acted(_ action: Finding.Action, name: String, freed: UInt64) -> String {
+        let tail = freed > 0 ? ", freed \(Format.size(freed))." : "."
+        switch action {
+        case .quitApp: return "Quit \(name)\(tail)"
+        case .shutdownSim, .sigterm, .sigtermAll, .stopService: return "Stopped \(name)\(tail)"
+        case .endSessions: return "Closed the quiet sessions\(tail)"
+        case .trash, .trashAll: return "Moved \(name) to the Trash."
+        case .stopBackup: return "Skipped this backup."
+        case .restart: return "The Restart window is open."
+        case .emptyTrash: return "Emptied the Trash\(tail)"
+        case .deleteRuntime, .deleteDevice, .deleteUnavailableSims: return "Removed \(name)\(tail)"
+        }
+    }
+
     // Outcomes.
     static func askedToSave(_ name: String) -> String { "\(name) asked to save first, so it stayed open." }
     static func stayedOpen(_ name: String) -> String { "\(name) didn't want to close, so it stayed as it was." }
     static func couldNotClose(_ name: String) -> String { "Couldn't close \(name). You can quit it from its own menu." }
+    static func couldNotMove(_ name: String) -> String { "Couldn't move \(name) to the Trash." }
     static let refusedSystem = "Part of macOS, so it stays."
     static let refusedEssential = "Something you rely on, so it stays."
     static let refusedInUse = "You're using it right now, so it stays."
@@ -83,27 +145,40 @@ enum Copy {
     static let refusedKept = "On your Always keep list."
     static let refusedBusy = "It's busy with something, so it stays."
     static let refusedConnected = "Something is connected to it, so it stays."
-    static let restartServer = "Start it again from the project folder when you need it"
+    static let refusedChanges = "It has changes that were never committed, so it stays."
+    static func refusedAppOpen(_ name: String) -> String { "\(name) is open, so its cache stays. Quit it first." }
+    static let backupFailed = "Time Machine didn't stop. You can skip the backup from its menu."
+    static let restartFailed = "Couldn't open the Restart window. Restart from the Apple menu instead."
+    static let emptyTrashFailed = "Couldn't empty the Trash. Allow YouFixIt to control Finder in Privacy & Security, Automation."
+    static func removeFailed(_ name: String) -> String { "Couldn't remove \(name). Xcode can remove it from its settings." }
 
     // Good to know.
     static let spotlight = "Spotlight is building its search index. It finishes on its own."
     static let spotlightLink = "Open Spotlight settings"
     static let photos = "Photos is looking through your library. It finishes on its own, mostly while charging."
-    static let timeMachine = "Time Machine is backing up."
+    static let timeMachine = "Time Machine is backing up. Skipping this one is fine, the next backup runs on schedule."
     static let update = "macOS is downloading an update."
+    static let updateLink = "Open Software Update"
     static func tabs(_ browser: String, _ n: Int, _ bytes: UInt64) -> String {
         "\(browser) has about \(n) tabs open (\(Format.size(bytes))). Closing the ones you're done with helps. Tabs are never closed for you."
     }
-    /// `quiet` names up to three project folders whose sessions have gone quiet; `more` says the list was cut.
-    static func claude(_ n: Int, _ bytes: UInt64, quiet: [String], more: Bool) -> String {
-        guard !quiet.isEmpty else { return "\(n) Claude coding sessions are open (\(Format.size(bytes))). Closing finished ones in Claude's sidebar frees memory." }
-        return "\(n) Claude sessions are open (\(Format.size(bytes))). Quiet ones: \(quiet.joined(separator: ", "))\(more ? " and more" : ""). Close finished ones from the sidebar."
+    /// `quiet` names up to three project folders whose sessions have gone quiet; `more` says the list was cut;
+    /// `closable` says the row has a button that closes them.
+    static func claude(_ n: Int, _ bytes: UInt64, quiet: [String], more: Bool, closable: Bool) -> String {
+        let open = "\(n) Claude sessions are open (\(Format.size(bytes)))."
+        let list = quiet.joined(separator: ", ") + (more ? " and more" : "")
+        switch (quiet.isEmpty, closable) {
+        case (true, false): return "\(n) Claude coding sessions are open (\(Format.size(bytes))). Closing finished ones in Claude's sidebar frees memory."
+        case (true, true): return "\(open) Some have been quiet for half an hour. Closing them keeps their chats."
+        case (false, true): return "\(open) Quiet for half an hour: \(list). Closing keeps their chats."
+        case (false, false): return "\(open) Quiet ones: \(list). Close finished ones from the sidebar."
+        }
     }
     static func showApp(_ name: String) -> String { "Show \(name)" }
     static let showFolder = "Show in Finder"
     static let activityMonitorLink = "Open Activity Monitor"
-    static let serviceConnected = "Running from Homebrew. Something is connected to it, so it stays."
-    static let serviceBusy = "Running from Homebrew. It's busy, so it stays."
+    static let serviceConnected = "Running from Homebrew, and something is connected to it right now."
+    static let serviceBusy = "Running from Homebrew, and busy right now."
     static let memorySqueeze = "Memory is nearly full, so your Mac is juggling. Letting go of the things above helps right away."
     static let backlog = "Lots of programs are waiting their turn. Closing idle ones clears the queue."
     static let drawing = "Drawing all those windows is hard work. Fewer open windows means a smoother Mac."
@@ -111,24 +186,42 @@ enum Copy {
     static func loginLaunches(_ n: Int) -> String { "\(n) apps opened by themselves when you logged in. You can pick which ones in Login Items." }
     static let loginLink = "Open Login Items"
     static func longUptime(_ days: Int) -> String { "Your Mac has been on for \(days) days. A restart gives it a fresh start." }
-    static func otherLeftover(_ name: String, _ bytes: UInt64) -> String { "A leftover \(name) program is holding \(Format.size(bytes)). If it isn't yours, quit it from Terminal." }
+    static func otherLeftover(_ name: String, _ bytes: UInt64) -> String { "A \(name) program left running after its session ended. Stop it if you don't need it." }
     static let liveTestBrowser = "A script is running a browser right now. It closes when the script is done."
-    static func trashSize(_ bytes: UInt64) -> String { "The Trash holds \(Format.size(bytes)). Empty it from Finder when you're sure." }
+    static func trashSize(_ bytes: UInt64) -> String { "The Trash holds \(Format.size(bytes)). Emptying it gives that space back for good." }
+    static func trashMoved(_ bytes: UInt64) -> String { "YouFixIt moved \(Format.size(bytes)) to the Trash. The space comes back once the Trash is emptied." }
     static let trashLink = "Open Trash"
-    static func oldRuntime(_ name: String, _ bytes: UInt64) -> String { "The \(name) simulator hasn't been used in months (\(Format.size(bytes))). Remove it in Xcode's Components settings." }
-    static func oldDevice(_ name: String, _ bytes: UInt64) -> String { "The test iPhone \(name) hasn't been used in months (\(Format.size(bytes))). Remove it in Xcode's Devices window." }
+    static func oldRuntime(_ name: String, _ bytes: UInt64) -> String { "The \(name) simulator hasn't been used in months. Xcode downloads it again if you ever need it." }
+    static func oldDevice(_ name: String, _ bytes: UInt64) -> String { "The test iPhone \(name) hasn't been used in months. Removing it deletes the apps and data on it." }
     static func vmApp(_ name: String, _ bytes: UInt64) -> String { "\(name) is holding \(Format.size(bytes)) for a virtual machine. Shut the machine down inside \(name) when you're done." }
-    static func brewServices(_ names: [String], _ bytes: UInt64) -> String {
-        "Started at login by Homebrew: \(names.joined(separator: ", ")) (\(Format.size(bytes))). brew services stop NAME turns one off."
-    }
-    static func menuBarApps(_ top: [(String, UInt64)], _ bytes: UInt64) -> String {
-        let named = top.map { "\($0.0) \(Format.size($0.1))" }.joined(separator: ", ")
-        return "Menu bar apps hold \(Format.size(bytes)): \(named). Quit the ones you don't use from their own icons."
-    }
+    static let brewProgram = "Started from Homebrew and left running in the background. Stop it if you're not using it."
+    static let menuBarApp = "A menu bar app sitting quiet in the background. Quit it if you don't need it right now."
     static func busyProgram(_ name: String) -> String { "\(name) has been working hard for a few minutes. If you're not waiting on it, quitting it gives the Mac a breather." }
-    static func leftoverWatcher(_ bytes: UInt64) -> String { "Left over from a coding session, holding \(Format.size(bytes)). It isn't serving anything; quit it from Terminal if it isn't yours." }
+    static func leftoverWatcher(_ bytes: UInt64) -> String { "Left over from a coding session and serving nothing. Stop it if you don't need it." }
     static let connectedServer = "Still running from a coding session, and something is connected to it right now."
-    static func otherCache(_ bytes: UInt64) -> String { "Holds \(Format.size(bytes)) of downloaded tool data. Some tools need reinstalling after it's removed, so it's left to you." }
+    static let notebook = "A notebook server left running. Its notebooks may hold unsaved work, so save them before you stop it."
+    static func leftoverDatabase(place: String?) -> String {
+        place.map { "Left running by a coding session in \($0). Nothing is connected over the network." }
+            ?? "Left running by a coding session. Nothing is connected over the network."
+    }
+    /// "Vorssaint has kept your Mac awake for 23 hours."
+    static func keepingAwake(_ name: String, for seconds: TimeInterval) -> String {
+        let hours = Int(seconds / 3600)
+        let span = hours >= 48 ? "\(hours / 24) days" : hours >= 2 ? "\(hours) hours" : "an hour"
+        return "\(name) has kept your Mac awake for \(span), so it can't sleep to save power."
+    }
+    static func otherCache(_ bytes: UInt64) -> String { "Holds \(Format.size(bytes)) of downloaded tool data. Some tools need reinstalling after it's cleared, so it's your call." }
+    static func appCacheName(_ app: String) -> String { "\(app) cache" }
+    static func appCache(_ app: String) -> String { "\(app) keeps downloaded data here and fetches it again when needed. It can go while \(app) is closed." }
+    static func appCacheOpen(_ app: String) -> String { "\(app) keeps downloaded data here and fetches it again when needed. Quit \(app) first to clear it." }
+    static func unmergedWorktrees(_ project: String) -> String { "Unmerged worktrees in \(project)" }
+    static func whyUnmergedWorktrees(_ n: Int) -> String {
+        "\(n == 1 ? "1 quiet copy" : "\(n) quiet copies") with commits that were never merged. Their branches keep the commits, so the folders can go."
+    }
+    static func dirtyWorktrees(_ project: String) -> String { "Worktrees with changes in \(project)" }
+    static func whyDirtyWorktrees(_ n: Int) -> String {
+        "\(n == 1 ? "1 quiet copy has" : "\(n) quiet copies have") changes that were never committed. Look through them before removing any."
+    }
     static func lowDisk(_ free: UInt64) -> String { "Only \(Format.size(free)) of space is left. The things above are the quickest way to make room." }
 
     // Footer and settings.
@@ -159,7 +252,7 @@ enum Copy {
     static let welcome2 = "When something you're not using is slowing it down, it suggests one button press."
     static let welcome3 = "Nothing changes until you press it."
     static let neverHeading = "It never:"
-    static let never1 = "Deletes your files. Anything it clears goes to the Trash first, and you can put it back."
+    static let never1 = "Deletes your files on its own. Anything it clears goes to the Trash first, and emptying the Trash is always your call."
     static let never2 = "Closes what you're working in."
     static let never3 = "Touches your browser tabs."
     static let startWatching = "Start watching"
@@ -171,9 +264,12 @@ enum Copy {
     // Accessibility.
     static func a11yInclude(_ name: String, _ bytes: UInt64) -> String { "Include \(name), about \(Format.size(bytes))" }
     static func a11yKeep(_ name: String) -> String { "Keep \(name), never suggest it" }
+    static func a11yHide(_ name: String) -> String { "Hide \(name), never mention it" }
+    static func a11yAct(_ verb: String, _ name: String) -> String { "\(verb.replacingOccurrences(of: "…", with: "")) \(name)" }
     static func a11yTidy(_ n: Int, _ bytes: UInt64) -> String { "Tidy up \(things(n)), frees about \(Format.size(bytes))" }
     static func a11yClosing(_ name: String) -> String { "\(name), closing" }
     static func a11yClosed(_ name: String) -> String { "\(name), closed" }
+    static func a11yWorking(_ name: String) -> String { "\(name), working" }
 
     static func things(_ n: Int) -> String { n == 1 ? "1 thing" : "\(n) things" }
 }

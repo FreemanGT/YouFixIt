@@ -13,6 +13,8 @@ enum Snapshot {
         var working = false
         var done = false
         var kept = false
+        var confirm: String? = nil      // a Good to know row showing its "can't be undone" confirm
+        var act: String? = nil          // a Good to know row whose button was pressed
     }
 
     private static let scenes: [Scene] = [
@@ -21,6 +23,8 @@ enum Snapshot {
         Scene(name: "heavy", mock: "heavy"),
         Scene(name: "good-to-know-open", mock: "heavy", knowOpen: true),
         Scene(name: "know-open", mock: "chrome40", knowOpen: true),
+        Scene(name: "know-confirm", mock: "heavy", knowOpen: true, confirm: "know:trash"),
+        Scene(name: "know-undo", mock: "heavy", knowOpen: true, act: "know:menubar:com.raycast.macos"),
         Scene(name: "busy", mock: "busyProgram", knowOpen: true),
         Scene(name: "kept-undo-line", mock: "heavy", kept: true),
         Scene(name: "working-mid", mock: "heavy", working: true),
@@ -39,6 +43,8 @@ enum Snapshot {
             engine.startMock(named: scene.mock)
             if scene.paused { engine.pause(for: 3600) }
             if scene.kept, let first = engine.running.first { engine.keep(first) }
+            if let id = scene.confirm { engine.confirming = id }
+            if let id = scene.act, let f = engine.findings.first(where: { $0.id == id }) { await engine.act(f) }
             if scene.working {
                 let task = Task { await engine.clean() }
                 try? await Task.sleep(for: .milliseconds(1000))

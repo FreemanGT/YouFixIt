@@ -36,6 +36,21 @@ final class Engine {
         var closed: Int { rows.filter { $0.outcome == .done }.count }
     }
 
+    /// The 5 s "Won't suggest X again. Undo" line. `know` says it came from a Good to know row, which reads "mention".
+    struct Kept: Equatable {
+        let key: String
+        let name: String
+        let know: Bool
+    }
+
+    /// The line under Good to know after one of its buttons: what happened, with Undo while it can still be taken back.
+    struct Acted: Equatable {
+        let id: String
+        let text: String
+        let undoable: Bool
+        let token = UUID()
+    }
+
     private(set) var mood: Mood = .scanning
     private(set) var findings: [Finding] = []
     var selected: Set<String> = []
@@ -46,8 +61,15 @@ final class Engine {
     private(set) var undoUntil: Date?
     private(set) var pausedUntil: Date?
     private(set) var keep: [String: String] = [:]           // keepKey → name
-    private(set) var kept: (key: String, name: String)?     // the 5 s "Won't suggest X again. Undo" line
+    private(set) var kept: Kept?
     private(set) var spike = Spike()
+    /// The Good to know row whose button is running. One at a time, and never while Tidy up runs.
+    private(set) var acting: String?
+    /// What a Good to know button did, shown on its row for a minute in place of the button.
+    private(set) var knowOutcome: [String: Outcome] = [:]
+    private(set) var acted: Acted?
+    /// A row whose button can't be undone, waiting for its inline confirm.
+    var confirming: String?
     var popoverOpen = false {
         didSet {
             guard popoverOpen != oldValue else { return }
@@ -64,8 +86,12 @@ final class Engine {
     private var lastActivated: [String: Date] = [:]
     private var loop: Task<Void, Never>?
     private var undoRecords: [UndoRecord] = []
+    private var actUndo: [UndoRecord] = []
     private var skipUntil: [String: Date] = [:]
     private var nudgedIDs: [String: Date] = [:]
+    /// What YouFixIt itself put in the Trash: its path in the Trash → [bytes, when]. Measuring ~/.Trash needs Full Disk
+    /// Access, so this is how the Trash row knows there is space waiting there.
+    private var ledger: [String: [Double]] = [:]
     private let launchedAt = Date()
     private var wokeAt: Date?
     private var pressureSource: DispatchSourceMemoryPressure?
@@ -73,6 +99,7 @@ final class Engine {
 
     nonisolated static let pausedKey = "pausedUntil"
     nonisolated static let activatedKey = "lastActive"
+    nonisolated static let ledgerKey = "trashLedger"
 
     var running: [Finding] { findings.filter { $0.group == .running && $0.actionable } }
     var space: [Finding] { findings.filter { $0.group == .space && $0.actionable } }
@@ -84,6 +111,7 @@ final class Engine {
     var canUndo: Bool { (undoUntil.map { $0 > Date() } ?? false) && (!undoRecords.isEmpty || mock) }
     var paused: Bool { pausedUntil.map { $0 > Date() } ?? false }
     var latestSample: Sample? { history.last }
+    var trashed: UInt64 { UInt64(ledger.values.reduce(0.0) { $0 + ($1.first ?? 0) }) }
 
     // MARK: - Life cycle
 
@@ -93,6 +121,9 @@ final class Engine {
             lastActivated = stored.mapValues { Date(timeIntervalSince1970: $0) }
         }
         if let until = UserDefaults.standard.object(forKey: Self.pausedKey) as? Date, until > Date() { pausedUntil = until }
+        // Thirty days on, Finder may have emptied it on its own, and the user has surely looked.
+        let stored = UserDefaults.standard.dictionary(forKey: Self.ledgerKey) as? [String: [Double]] ?? [:]
+        ledger = stored.filter { Date().timeIntervalSince1970 - ($0.value.last ?? 0) < 30 * 86_400 }
         if let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier { lastActivated[front] = Date() }
         let center = NSWorkspace.shared.notificationCenter
         center.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { [weak self] note in
@@ -196,11 +227,12 @@ final class Engine {
 
     private func recompute() {
         let now = Date()
-        let all = Rules.findings(history: history, disk: disk, keep: Set(keep.keys), tuning: tuning)
+        let all = Rules.findings(history: history, disk: disk, keep: Set(keep.keys), tuning: tuning, trashed: trashed)
             .filter { skipUntil[$0.id].map { $0 < now } ?? true }
         let known = Set(findings.map(\.id))
         for f in all where f.actionable && !known.contains(f.id) { selected.insert(f.id) }
         selected = selected.filter { id in all.contains { $0.id == id } }
+        if let id = confirming, !all.contains(where: { $0.id == id }) { confirming = nil }
         findings = all
         updateMood()
     }
@@ -231,10 +263,11 @@ final class Engine {
     // MARK: - The button
 
     func clean() async {
-        guard !isWorking else { return }
+        guard !isWorking, acting == nil else { return }
         let targets = selectedFindings
         guard !targets.isEmpty else { return }
         isWorking = true
+        confirming = nil
         progress = [:]
         result = nil
         undoRecords = []
@@ -243,42 +276,34 @@ final class Engine {
         var space: UInt64 = 0
         var memory: UInt64 = 0
         for f in targets {
-            let outcome: Outcome
+            let r: ActResult
             if mock {
                 try? await Task.sleep(for: .milliseconds(700))
-                outcome = .done
+                r = ActResult(outcome: .done, freed: f.bytes)
             } else {
-                let (o, undo) = await Actions.perform(f, history: history, keep: Set(keep.keys), tuning: tuning)
-                outcome = o
-                if let undo { undoRecords.append(undo) }
+                r = await Actions.perform(f, history: history, keep: Set(keep.keys), tuning: tuning)
+                undoRecords += r.undo
             }
+            record(r, of: f)
             // What the closed things held is the honest number; a whole-machine before/after is swamped by everything else.
-            if outcome == .done, f.group == .running { memory += f.bytes }
-            if outcome == .done, f.group == .space {
-                space += f.bytes
-                if let d = disk, case .trash(let path) = f.action {
-                    disk = DiskScan(at: d.at, items: d.items.filter { $0.path != path }, unavailableSims: d.unavailableSims, freeBytes: d.freeBytes + f.bytes, totalBytes: d.totalBytes)
-                }
-                if let d = disk, f.action == .deleteUnavailableSims {
-                    disk = DiskScan(at: d.at, items: d.items, unavailableSims: 0, freeBytes: d.freeBytes, totalBytes: d.totalBytes)
-                }
-            }
-            if outcome == .askedToSave || outcome == .stillRunning { skipUntil[f.id] = Date().addingTimeInterval(86_400) }
-            progress[f.id] = outcome
-            rows.append(Row(finding: f, outcome: outcome))
+            if r.outcome == .done, f.group == .running { memory += r.freed }
+            if r.outcome == .done, f.group == .space { space += r.freed }
+            if r.outcome == .askedToSave || r.outcome == .stillRunning { skipUntil[f.id] = Date().addingTimeInterval(86_400) }
+            progress[f.id] = r.outcome
+            rows.append(Row(finding: f, outcome: r.outcome))
         }
         if !mock {
             try? await Task.sleep(for: .seconds(3))
             await sample()
         }
         result = Result(freedMemory: memory, freedSpace: space, rows: rows)
-        undoUntil = Date().addingTimeInterval(TimeInterval(60))
+        undoUntil = Date().addingTimeInterval(Theme.undoWindow)
         isWorking = false
-        if mock { history = history.map { $0 }; findings.removeAll { f in rows.contains { $0.id == f.id } } }
+        if mock { findings.removeAll { f in rows.contains { $0.id == f.id } } }
         updateMood()
         if result?.closed ?? 0 > 0 { Sound.play(.done) }
         Task { [weak self] in
-            try? await Task.sleep(for: .seconds(61))
+            try? await Task.sleep(for: .seconds(Theme.undoWindow + 1))
             self?.expireUndo()
         }
     }
@@ -296,10 +321,144 @@ final class Engine {
         undoRecords = []
         undoUntil = nil
         result = nil
-        for r in records { _ = await Actions.undo(r) }
+        for r in records {
+            if await Actions.undo(r) { putBack(r) }
+        }
         Sound.play(.undo)
         updateMood()
         if !mock { scanNow() }
+    }
+
+    // MARK: - Good to know buttons
+
+    /// The first press on a button that can't be undone only asks; the row turns into its confirm.
+    func press(_ f: Finding) async {
+        guard f.offer, acting == nil, !isWorking else { return }
+        if f.action?.irreversible == true, confirming != f.id {
+            confirming = f.id
+            return
+        }
+        await act(f)
+    }
+
+    /// Runs one Good to know row's button. The user picked it, so busy and recently used no longer hold it back; every
+    /// other safety check still does. The row says how it went for a minute; the line under the card offers Undo.
+    func act(_ f: Finding) async {
+        guard f.offer, let action = f.action, acting == nil, !isWorking else { return }
+        confirming = nil
+        acting = f.id
+        knowOutcome[f.id] = nil
+        let r: ActResult
+        if mock {
+            try? await Task.sleep(for: .milliseconds(700))
+            r = ActResult(outcome: .done, freed: f.bytes)
+        } else {
+            r = await Actions.perform(f, history: history, keep: Set(keep.keys), tuning: tuning, explicit: true)
+        }
+        record(r, of: f)
+        acting = nil
+        knowOutcome[f.id] = r.outcome
+        if r.outcome == .done {
+            actUndo = r.undo
+            let line = Acted(id: f.id, text: Copy.acted(action, name: f.name, freed: r.freed), undoable: !r.undo.isEmpty || (mock && f.undoLabel != nil))
+            acted = line
+            Sound.play(.done)
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(line.undoable ? Theme.undoWindow : 10))
+                if self?.acted?.token == line.token { self?.acted = nil; self?.actUndo = [] }
+            }
+        }
+        let outcome = r.outcome
+        Task { [weak self] in
+            try? await Task.sleep(for: .seconds(Theme.undoWindow))
+            if self?.knowOutcome[f.id] == outcome { self?.knowOutcome[f.id] = nil }
+        }
+        if mock {
+            if outcome == .done { findings.removeAll { $0.id == f.id } }
+            updateMood()
+        } else {
+            try? await Task.sleep(for: .seconds(2))
+            await sample()
+        }
+    }
+
+    func undoAct() async {
+        guard let line = acted, line.undoable else { return }
+        let records = actUndo
+        actUndo = []
+        acted = nil
+        knowOutcome[line.id] = nil
+        for r in records {
+            if await Actions.undo(r) { putBack(r) }
+        }
+        Sound.play(.undo)
+        if mock { recompute() } else { scanNow() }
+    }
+
+    // MARK: - Bookkeeping after an action
+
+    /// What the disk scan and the Trash ledger learn from an action that went through.
+    private func record(_ r: ActResult, of f: Finding) {
+        guard r.outcome == .done else { return }
+        // Moves into the Trash join the ledger, each with what it held.
+        var sizes: [String: UInt64] = [:]
+        switch f.action {
+        case .trash(let path): sizes[path] = f.bytes
+        case .trashAll(let targets): for t in targets { sizes[t.path] = t.bytes }
+        case .emptyTrash: ledger = [:]
+        default: break
+        }
+        let now = Date().timeIntervalSince1970
+        for case .putBack(let from, let to) in r.undo {
+            ledger[from.path] = [Double(sizes[to.path] ?? 0), now]
+        }
+        saveLedger()
+        forget(f, r)
+    }
+
+    /// A Put back that worked takes its entry out of the ledger.
+    private func putBack(_ record: UndoRecord) {
+        guard case .putBack(let from, _) = record else { return }
+        ledger.removeValue(forKey: from.path)
+        saveLedger()
+    }
+
+    private func saveLedger() {
+        if !mock { UserDefaults.standard.set(ledger, forKey: Self.ledgerKey) }
+    }
+
+    /// Drops what went from the last disk scan, so its rows go now rather than at the next scan hours later. Moving to
+    /// the Trash frees nothing until the Trash is emptied, so only emptying and removing add to the free space.
+    private func forget(_ f: Finding, _ r: ActResult) {
+        guard let d = disk else { return }
+        var items = d.items
+        var free = d.freeBytes
+        var unavailable = d.unavailableSims
+        switch f.action {
+        case .trash(let path):
+            items.removeAll { $0.path == path }
+        case .trashAll(let targets):
+            let moved = Set(r.undo.compactMap { record -> String? in
+                if case .putBack(_, let to) = record { return to.path }
+                return nil
+            })
+            let gone = Set(targets.map(\.path)).filter { moved.contains($0) || !FileManager.default.fileExists(atPath: $0) }
+            items.removeAll { gone.contains($0.path) }
+        case .emptyTrash:
+            items.removeAll { $0.kind == .trash }
+            free += r.freed
+        case .deleteRuntime(let id):
+            items.removeAll { $0.path == id }
+            free += r.freed
+        case .deleteDevice(let udid):
+            items.removeAll { $0.path == udid }
+            free += r.freed
+        case .deleteUnavailableSims:
+            unavailable = 0
+        default:
+            return
+        }
+        disk = DiskScan(at: d.at, items: items, unavailableSims: unavailable, freeBytes: free, totalBytes: d.totalBytes)
     }
 
     // MARK: - Keep, pause
@@ -307,11 +466,13 @@ final class Engine {
     func keep(_ f: Finding) {
         keep[f.keepKey] = f.name
         if !mock { UserDefaults.standard.set(keep, forKey: Safety.keepKey) }
-        kept = (f.keepKey, f.name)
+        let line = Kept(key: f.keepKey, name: f.name, know: f.group == .know)
+        kept = line
+        if confirming == f.id { confirming = nil }
         recompute()
         Task { [weak self] in
             try? await Task.sleep(for: .seconds(5))
-            if self?.kept?.key == f.keepKey { self?.kept = nil }
+            if self?.kept == line { self?.kept = nil }
         }
     }
 

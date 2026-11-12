@@ -118,9 +118,19 @@ struct FindingRow: View {
     }
 }
 
-/// An explain-only row: a symbol, a name, the plain reason, and sometimes a place to go.
+/// A Good to know row: a symbol, a name, the plain reason, and what can be done about it. A button when the app can do
+/// it for you (never selected, never part of Tidy up, only done when pressed), a link when only you can.
 struct KnowRow: View {
     let finding: Finding
+    @Bindable var engine: Engine
+    @State private var hovering = false
+
+    private var outcome: Outcome? { engine.knowOutcome[finding.id] }
+    private var running: Bool { engine.acting == finding.id }
+    private var confirming: Bool { engine.confirming == finding.id }
+    /// The button shows until it is pressed; for a minute after, the row says how it went instead.
+    private var showButton: Bool { finding.offer && outcome == nil && !running && !confirming }
+    private var hasActions: Bool { running || confirming || showButton || finding.link != nil }
 
     var body: some View {
         HStack(alignment: .top, spacing: Theme.gap) {
@@ -133,17 +143,67 @@ struct KnowRow: View {
                 HStack(spacing: Theme.row) {
                     Text(finding.name).font(Theme.font(.bodyStrong)).lineLimit(1)
                     if finding.bytes > 0 {
-                        Text(Format.size(finding.bytes)).font(Theme.font(.caption)).foregroundStyle(.secondary)
+                        Text(Format.size(finding.bytes)).font(Theme.font(.caption)).foregroundStyle(.secondary).fixedSize()
+                    }
+                    Spacer(minLength: Theme.tight)
+                    if outcome == nil, !running, !confirming {
+                        Button(Copy.hide) { engine.keep(finding) }
+                            .buttonStyle(.plain)
+                            .font(Theme.font(.caption))
+                            .foregroundStyle(Theme.tint)
+                            .opacity(hovering ? 1 : 0)
+                            .help(Copy.hideTip(finding.name))
+                            .accessibilityLabel(Copy.a11yHide(finding.name))
                     }
                 }
-                Text(finding.why).font(Theme.font(.caption)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                if let link = finding.link {
-                    Button(link.title) { open(link) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+                Text(why)
+                    .font(Theme.font(.caption))
+                    .foregroundStyle(confirming ? Color.primary : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if hasActions {
+                    actions.padding(.top, Theme.tight)
                 }
             }
         }
         .padding(.vertical, Theme.tight)
-        .accessibilityElement(children: .combine)
+        .contentShape(Rectangle())
+        .onHover { hovering = $0 }
+        .accessibilityElement(children: .contain)
+    }
+
+    @ViewBuilder private var actions: some View {
+        HStack(spacing: Theme.gap) {
+            if running {
+                ProgressView().controlSize(.small)
+                    .frame(height: Theme.pillSmall)
+                    .accessibilityLabel(Copy.a11yWorking(finding.name))
+            } else if confirming, let action = finding.action {
+                Button(Copy.confirmVerb(action)) { Task { await engine.press(finding) } }
+                    .buttonStyle(PillStyle(compact: true))
+                    .accessibilityLabel(Copy.a11yAct(Copy.confirmVerb(action), finding.name))
+                Button(Copy.cancel) { engine.confirming = nil }
+                    .buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+            } else if showButton, let action = finding.action {
+                Button(Copy.verb(action)) { Task { await engine.press(finding) } }
+                    .buttonStyle(PillStyle(filled: false, compact: true))
+                    .disabled(engine.acting != nil || engine.isWorking)
+                    .accessibilityLabel(Copy.a11yAct(Copy.verb(action), finding.name))
+            }
+            if let link = finding.link, !confirming {
+                Button(link.title) { open(link) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+            }
+        }
+    }
+
+    private var why: String {
+        if confirming { return Copy.cantUndo }
+        switch outcome {
+        case .done: return engine.acted?.id == finding.id ? engine.acted?.text ?? finding.why : finding.why
+        case .askedToSave: return Copy.askedToSave(finding.name)
+        case .stillRunning: return Copy.stayedOpen(finding.name)
+        case .refused(let reason), .failed(let reason): return reason
+        case nil: return finding.why
+        }
     }
 
     /// A bare path is shown in Finder, selected and ready to drag to the Trash. A URL is opened: an app bundle comes to

@@ -7,8 +7,10 @@ struct PopoverView: View {
 
     @Bindable var engine: Engine
     @State var pane: Pane = .main
-    @State var knowOpen = false
+    /// Good to know stays open once it has been opened, across launches.
+    @State var knowOpen = UserDefaults.standard.bool(forKey: PopoverView.knowOpenKey)
     @State private var size = CGSize.zero
+    nonisolated static let knowOpenKey = "knowOpen"
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -26,6 +28,7 @@ struct PopoverView: View {
         .animation(reduceMotion ? .easeInOut(duration: Theme.state) : Theme.settle, value: pane)
         .onAppear { engine.popoverOpen = true }
         .onDisappear { engine.popoverOpen = false }
+        .onChange(of: knowOpen) { _, open in if !Render.offscreen { UserDefaults.standard.set(open, forKey: Self.knowOpenKey) } }
     }
 }
 
@@ -70,6 +73,11 @@ struct MainPane: View {
                     .padding(.horizontal, Theme.edge)
                     .padding(.top, Theme.gap)
             }
+            if let acted = engine.acted, engine.mood != .paused {
+                actedLine(acted)
+                    .padding(.horizontal, Theme.edge)
+                    .padding(.top, Theme.gap)
+            }
             if engine.mood != .paused, !engine.actionable.isEmpty || engine.mood == .done || engine.mood == .working {
                 primary
                     .padding(.horizontal, Theme.edge)
@@ -107,7 +115,8 @@ struct MainPane: View {
             if !engine.running.isEmpty { h += sectionHead + cards(engine.running.count); sections += 1 }
             if !engine.space.isEmpty { h += sectionHead + cards(engine.space.count); sections += 1 }
         }
-        if !engine.know.isEmpty { h += 44 + (knowOpen ? CGFloat(engine.know.count) * 64 : 0); sections += 1 }
+        // A Good to know row with a button or a link under its reason is a line taller.
+        if !engine.know.isEmpty { h += 44 + (knowOpen ? engine.know.reduce(0) { $0 + ($1.offer || $1.link != nil ? 96 : 64) } : 0); sections += 1 }
         h += CGFloat(max(0, sections - 1)) * Theme.section
         return h
     }
@@ -192,10 +201,21 @@ struct MainPane: View {
         return reduceMotion ? .easeOut(duration: 0.2) : Theme.arrive.delay(Double(min(index, Theme.staggerCap)) * Theme.stagger)
     }
 
-    private func keptLine(_ kept: (key: String, name: String)) -> some View {
+    private func keptLine(_ kept: Engine.Kept) -> some View {
         HStack(spacing: Theme.row) {
-            Text(Copy.kept(kept.name)).font(Theme.font(.caption)).foregroundStyle(.secondary).lineLimit(1)
+            Text(kept.know ? Copy.hidden(kept.name) : Copy.kept(kept.name)).font(Theme.font(.caption)).foregroundStyle(.secondary).lineLimit(1)
             Button(Copy.undo) { engine.unkeep(kept.key) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+        }
+        .transition(.opacity)
+    }
+
+    /// What a Good to know button just did, with Undo while it can be taken back.
+    private func actedLine(_ acted: Engine.Acted) -> some View {
+        HStack(spacing: Theme.row) {
+            Text(acted.text).font(Theme.font(.caption)).foregroundStyle(.secondary).lineLimit(1)
+            if acted.undoable {
+                Button(Copy.undo) { Task { await engine.undoAct() } }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+            }
         }
         .transition(.opacity)
     }
@@ -205,7 +225,7 @@ struct MainPane: View {
             VStack(alignment: .leading, spacing: Theme.row) {
                 ForEach(Array(engine.know.enumerated()), id: \.element.id) { index, finding in
                     if index > 0 { Divider() }
-                    KnowRow(finding: finding)
+                    KnowRow(finding: finding, engine: engine)
                 }
             }
             .padding(.top, Theme.row)
@@ -235,7 +255,7 @@ struct MainPane: View {
                 }
                 .buttonStyle(PillStyle())
                 .keyboardShortcut(.defaultAction)
-                .disabled(none || engine.isWorking)
+                .disabled(none || engine.isWorking || engine.acting != nil)
                 .accessibilityLabel(Copy.a11yTidy(engine.selectedFindings.count, engine.selectedMemory + engine.selectedSpace))
                 let caption = Copy.frees(memory: engine.selectedMemory, space: engine.selectedSpace)
                 if !caption.isEmpty {
