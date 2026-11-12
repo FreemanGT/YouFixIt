@@ -93,7 +93,7 @@ struct FindingRow: View {
                 Button(Copy.keep) { engine.keep(finding) }
                     .buttonStyle(.plain)
                     .font(Theme.font(.bodyStrong))
-                    .foregroundStyle(Theme.tint)
+                    .foregroundStyle(Theme.tintText)
                     .opacity(hovering ? 1 : 0)
                     .help(Copy.keepTip(finding.name))
                     .accessibilityLabel(Copy.a11yKeep(finding.name))
@@ -150,7 +150,7 @@ struct KnowRow: View {
                         Button(Copy.hide) { engine.keep(finding) }
                             .buttonStyle(.plain)
                             .font(Theme.font(.caption))
-                            .foregroundStyle(Theme.tint)
+                            .foregroundStyle(Theme.tintText)
                             .opacity(hovering ? 1 : 0)
                             .help(Copy.hideTip(finding.name))
                             .accessibilityLabel(Copy.a11yHide(finding.name))
@@ -182,7 +182,7 @@ struct KnowRow: View {
                     .buttonStyle(PillStyle(compact: true))
                     .accessibilityLabel(Copy.a11yAct(Copy.confirmVerb(action), finding.name))
                 Button(Copy.cancel) { engine.confirming = nil }
-                    .buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+                    .buttonStyle(.link).foregroundStyle(Theme.tintText).font(Theme.font(.caption))
             } else if showButton, let action = finding.action {
                 Button(Copy.verb(action)) { Task { await engine.press(finding) } }
                     .buttonStyle(PillStyle(filled: false, compact: true))
@@ -190,7 +190,7 @@ struct KnowRow: View {
                     .accessibilityLabel(Copy.a11yAct(Copy.verb(action), finding.name))
             }
             if let link = finding.link, !confirming {
-                Button(link.title) { open(link) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+                Button(link.title) { open(link) }.buttonStyle(.link).foregroundStyle(Theme.tintText).font(Theme.font(.caption))
             }
         }
     }

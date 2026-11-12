@@ -111,6 +111,8 @@ final class Engine {
     var canUndo: Bool { (undoUntil.map { $0 > Date() } ?? false) && (!undoRecords.isEmpty || mock) }
     var paused: Bool { pausedUntil.map { $0 > Date() } ?? false }
     var latestSample: Sample? { history.last }
+    /// The samples the rules judge by, oldest first (for `--scan --explain`).
+    var samples: [Sample] { history }
     var trashed: UInt64 { UInt64(ledger.values.reduce(0.0) { $0 + ($1.first ?? 0) }) }
 
     // MARK: - Life cycle
@@ -161,7 +163,7 @@ final class Engine {
         mock = true
         guard let spec = Fixtures.spec(named: name) else { return }
         history = Fixtures.history(spec)
-        disk = name == "heavy" ? Fixtures.disk : nil
+        disk = Fixtures.disk(named: name)
         lastScan = Date()
         _ = spike.update(history, tuning: tuning)
         recompute()
@@ -189,8 +191,10 @@ final class Engine {
         Task { await sample() }
     }
 
+    /// Running apps as the rules see them. A plain program that merely talked to the window server (next dev does) is
+    /// listed by AppKit as a nameless background "app"; it is judged as the program it is.
     private func seeds() -> [AppSeed] {
-        NSWorkspace.shared.runningApplications.map { app in
+        NSWorkspace.shared.runningApplications.filter { $0.bundleIdentifier != nil || $0.activationPolicy != .prohibited }.map { app in
             let id = app.bundleIdentifier ?? ""
             return AppSeed(pid: app.processIdentifier, bundleID: id, name: app.localizedName ?? id, url: app.bundleURL,
                            regular: app.activationPolicy == .regular, accessory: app.activationPolicy == .accessory,

@@ -28,8 +28,6 @@ enum Rules {
     /// Tails of a path that say nothing about whose it is.
     static let genericFolders: Set<String> = ["mysql", "postgres", "postgresql", "redis", "data", "db", "database", "var", "etc", "conf", "config", "run", "tmp",
                                               "source", "src", "public", "www", "htdocs", "dist"]
-    /// The quiet-session button is offered only while a live check shows Claude picks an ended session up again.
-    static let closeQuietSessions = true
 
     /// A link that brings a running app to the front (LaunchServices activates it; our own window closes).
     static func show(_ app: Sample.App) -> Finding.Link? {
@@ -181,8 +179,8 @@ enum Rules {
     /// "npm exec next dev --port 3120" reads as "next dev", "php -S 127.0.0.1:8902 -t …" as "php -S :8902",
     /// "npm run dev" as itself; anything else as `command` names it.
     static func serverName(_ args: [String]?, fallback: String) -> String {
-        guard var words = args, !words.isEmpty else { return fallback }
-        // A tool that renames itself (npm sets its title) can leave one argument holding the whole line.
+        // A tool that renames itself (npm sets its title) leaves one argument holding the whole line, then empty ones.
+        guard var words = args?.filter({ !$0.isEmpty }), !words.isEmpty else { return fallback }
         if words.count == 1, words[0].contains(" ") { words = words[0].split(separator: " ").map(String.init) }
         if let i = words.firstIndex(of: "-S"), words.indices.contains(i + 1) {
             return "php -S :\(words[i + 1].split(separator: ":").last.map(String.init) ?? words[i + 1])"
@@ -297,11 +295,16 @@ enum Rules {
         }
     }
 
+    /// Part of an app bundle, so it belongs to that app. Framework Python's Python.app is only how Python runs on a Mac.
+    static func insideApp(_ path: String) -> Bool {
+        path.contains(".app/") && !path.hasSuffix(Sampler.pythonApp)
+    }
+
     /// Our own processes that launchd adopted: parent pid 1, not an app, not a launchd job, not inside a bundle.
     static func orphans(_ s: Sample) -> [Sample.Proc] {
         s.procs.values.filter { p in
             p.uid == Sampler.me && p.ppid == 1 && s.app(p.pid) == nil && s.jobs[p.pid] == nil
-                && !Safety.neverPaths.contains(where: { p.path.hasPrefix($0) }) && !p.path.contains(".app/")
+                && !Safety.neverPaths.contains(where: { p.path.hasPrefix($0) }) && !insideApp(p.path)
         }
     }
 
@@ -359,7 +362,7 @@ enum Rules {
         return s.procs.values.sorted { $0.pid < $1.pid }.compactMap { p in
             guard p.uid == Sampler.me, Sampler.dbNames.contains(p.name), s.procs[p.ppid]?.name != p.name,
                   let root = s.root(of: p.pid), root.ppid == 1, s.app(root.pid) == nil, s.jobs[root.pid] == nil,
-                  !Safety.system(p.path), !root.path.contains(".app/"), !p.path.contains(".app/"),
+                  !Safety.system(p.path), !insideApp(root.path), !insideApp(p.path),
                   s.at.timeIntervalSince(p.start) >= t.orphanAge, avgCPU(root.pid, h, t.idle) < 0.02,
                   !s.tree(root.pid).contains(where: { (s.clients[$0.pid] ?? 0) > 0 }) else { return nil }
             let bytes = s.footprint(of: root.pid)
@@ -373,11 +376,14 @@ enum Rules {
 
     /// "node …/.bin/expo start --port 8081" reads as "expo start"; "node --liftoff-only …/codegraph.js" as "codegraph.js".
     static func command(_ args: [String]?, fallback: String) -> String {
-        guard let args else { return fallback }
+        guard let args = args?.filter({ !$0.isEmpty }) else { return fallback }
         let rest = args.dropFirst()
+        // Code given inline (node -e, python3 -c) is not a name; nor is anything after it.
+        let inline: Set<String> = ["-e", "-c", "--eval", "-p", "--print"]
+        let named = rest.prefix { !inline.contains($0) }
         // The script is the first path-like argument, else the first that is not a flag; an option's bare value can still win.
-        guard let i = rest.firstIndex(where: { !$0.hasPrefix("-") && ($0.contains("/") || $0.contains(".")) })
-                ?? rest.firstIndex(where: { !$0.hasPrefix("-") }) else { return fallback }
+        guard let i = named.firstIndex(where: { !$0.hasPrefix("-") && ($0.contains("/") || $0.contains(".")) })
+                ?? named.firstIndex(where: { !$0.hasPrefix("-") }) else { return fallback }
         let script = (args[i] as NSString).lastPathComponent
         let verb = args.dropFirst(i + 1).first.flatMap { $0.hasPrefix("-") ? nil : $0 }
         return [script, verb].compactMap { $0 }.joined(separator: " ")
@@ -562,7 +568,7 @@ enum Rules {
         if sessions.count >= 4 || sessionBytes >= 2 << 30 {
             let quiet = sessions.filter { s.at.timeIntervalSince(s.quietSince[$0.pid] ?? $0.start) >= t.sessionQuiet }
             let folders = Array(Set(quiet.compactMap { s.cwd[$0.pid].flatMap(project) })).sorted()
-            let action: Finding.Action? = closeQuietSessions && !quiet.isEmpty
+            let action: Finding.Action? = t.closeQuietSessions && !quiet.isEmpty
                 ? .endSessions(quiet.map { Finding.Target(pid: $0.pid, start: $0.start, bytes: s.footprint(of: $0.pid)) }) : nil
             know("claude", "Claude", Copy.claude(sessions.count, sessionBytes, quiet: Array(folders.prefix(3)), more: folders.count > 3, closable: action != nil),
                  "bubble.left.and.text.bubble.right", link: s.app(bundle: "com.anthropic.claudefordesktop").flatMap(show), bytes: sessionBytes, action: action)
@@ -617,7 +623,7 @@ enum Rules {
             var action: Finding.Action?
             if let app {
                 if !Safety.essential(app.bundleID) { action = .quitApp(pid: app.pid, bundleID: app.bundleID, url: app.url) }
-            } else if !Safety.system(p.path), !p.path.contains(".app/") {
+            } else if !Safety.system(p.path), !insideApp(p.path) {
                 action = .sigterm(pid: p.pid, start: p.start)
             }
             know("busy:\(p.pid)", name, Copy.busyProgram(name), "gauge.with.needle", link: app.flatMap(show) ?? activityMonitor,
@@ -656,10 +662,10 @@ enum Rules {
             if let app, Safety.essential(app.bundleID) { continue }
             let name = app?.name ?? command(s.args[pid], fallback: p.name)
             let action: Finding.Action? = app.map { .quitApp(pid: $0.pid, bundleID: $0.bundleID, url: $0.url) }
-                ?? (p.ppid == 1 && !p.path.contains(".app/") ? .sigterm(pid: pid, start: p.start) : nil)
+                ?? (p.ppid == 1 && !insideApp(p.path) ? .sigterm(pid: pid, start: p.start) : nil)
             let key = "awake:\(app?.bundleID ?? p.path)"
             know(key, name, Copy.keepingAwake(name, for: s.at.timeIntervalSince(since)), "cup.and.saucer", link: app.flatMap(show),
-                 action: action, undo: app != nil ? Copy.reopen : nil, keepKey: key)
+                 bytes: s.footprint(of: pid), action: action, undo: app != nil ? Copy.reopen : nil, keepKey: key)
         }
 
         // G12, G17: leftovers R3 does not stop on its own: programs that serve nothing, servers something is connected to,

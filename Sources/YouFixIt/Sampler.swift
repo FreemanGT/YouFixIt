@@ -50,7 +50,7 @@ actor Sampler {
             let haveTask = proc_pidinfo(pid, PROC_PIDTASKINFO, 0, &task, Int32(MemoryLayout<proc_taskinfo>.size)) > 0
             let start = TimeInterval(bsd.pbi_start_tvsec) + TimeInterval(bsd.pbi_start_tvusec) / 1_000_000
             let path = self.path(pid, start: start)
-            let name = path.isEmpty ? Self.shortName(&bsd) : (path as NSString).lastPathComponent
+            let name = path.isEmpty ? Self.shortName(&bsd) : Self.programName(path)
             let ticks = task.pti_total_user &+ task.pti_total_system
             var cpu = 0.0
             if haveTask, deltaMach > 0, let prev = prevTicks[pid], prev.start == start, ticks >= prev.ticks {
@@ -231,6 +231,13 @@ actor Sampler {
     }
 
     /// The executable of a process right now; "" when it is gone or unreadable.
+    /// What a program is called: its file name, except framework Python, which runs as ".../Python.app/Contents/MacOS/Python"
+    /// whatever started it (python3, a venv, Homebrew) and is called python3 here, so the Python rules see it.
+    nonisolated static func programName(_ path: String) -> String {
+        path.hasSuffix(pythonApp) ? "python3" : (path as NSString).lastPathComponent
+    }
+    nonisolated static let pythonApp = "/Python.app/Contents/MacOS/Python"
+
     nonisolated static func currentPath(_ pid: pid_t) -> String {
         var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
         let len = Int(proc_pidpath(pid, &buf, UInt32(buf.count)))

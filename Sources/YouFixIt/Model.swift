@@ -127,6 +127,8 @@ struct Tuning: Sendable {
     var sessionQuiet: TimeInterval = 1800 // Claude sessions: no CPU for this long counts as quiet
     var awakeHold: TimeInterval = 3600    // sleep blockers: held this long before they are mentioned
     var barAppMin: UInt64 = 400 << 20     // menu bar apps under this footprint are not mentioned
+    /// "Close quiet ones" on the Claude row. Off until a live check shows Claude picks an ended session up again.
+    var closeQuietSessions = false
     static let standard = Tuning()
 }
 

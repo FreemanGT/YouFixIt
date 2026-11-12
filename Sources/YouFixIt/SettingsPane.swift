@@ -20,7 +20,7 @@ struct SettingsPane: View {
                     }
                 }
                 .buttonStyle(.plain)
-                .foregroundStyle(Theme.tint)
+                .foregroundStyle(Theme.tintText)
                 .font(Theme.font(.body))
                 .keyboardShortcut(.cancelAction)
                 Spacer()
@@ -34,7 +34,7 @@ struct SettingsPane: View {
                 HStack {
                     Toggle(Copy.softSounds, isOn: $softSounds)
                     Spacer()
-                    Button(Copy.playSample) { Sound.play(.done, force: true) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.body))
+                    Button(Copy.playSample) { Sound.play(.done, force: true) }.buttonStyle(.link).foregroundStyle(Theme.tintText).font(Theme.font(.body))
                 }
                 VStack(alignment: .leading, spacing: Theme.hair) {
                     Toggle(Copy.notifications, isOn: Binding(get: { notifications }, set: { on in
@@ -68,7 +68,7 @@ struct SettingsPane: View {
                         HStack {
                             Text(name).font(Theme.font(.body)).lineLimit(1)
                             Spacer()
-                            Button(Copy.remove) { engine.unkeep(key) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+                            Button(Copy.remove) { engine.unkeep(key) }.buttonStyle(.link).foregroundStyle(Theme.tintText).font(Theme.font(.caption))
                         }
                         .padding(.top, Theme.tight)
                     }

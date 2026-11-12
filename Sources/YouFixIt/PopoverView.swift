@@ -204,7 +204,7 @@ struct MainPane: View {
     private func keptLine(_ kept: Engine.Kept) -> some View {
         HStack(spacing: Theme.row) {
             Text(kept.know ? Copy.hidden(kept.name) : Copy.kept(kept.name)).font(Theme.font(.caption)).foregroundStyle(.secondary).lineLimit(1)
-            Button(Copy.undo) { engine.unkeep(kept.key) }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+            Button(Copy.undo) { engine.unkeep(kept.key) }.buttonStyle(.link).foregroundStyle(Theme.tintText).font(Theme.font(.caption))
         }
         .transition(.opacity)
     }
@@ -214,7 +214,7 @@ struct MainPane: View {
         HStack(spacing: Theme.row) {
             Text(acted.text).font(Theme.font(.caption)).foregroundStyle(.secondary).lineLimit(1)
             if acted.undoable {
-                Button(Copy.undo) { Task { await engine.undoAct() } }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+                Button(Copy.undo) { Task { await engine.undoAct() } }.buttonStyle(.link).foregroundStyle(Theme.tintText).font(Theme.font(.caption))
             }
         }
         .transition(.opacity)
@@ -273,7 +273,7 @@ struct MainPane: View {
         HStack(spacing: Theme.row) {
             if engine.mood == .paused, let until = engine.pausedUntil {
                 Text(Copy.pausedUntil(until)).font(Theme.font(.caption)).foregroundStyle(.secondary)
-                Button(Copy.resume) { engine.resume() }.buttonStyle(.link).foregroundStyle(Theme.tint).font(Theme.font(.caption))
+                Button(Copy.resume) { engine.resume() }.buttonStyle(.link).foregroundStyle(Theme.tintText).font(Theme.font(.caption))
             } else {
                 Text(Copy.checked(ago: engine.lastScan)).font(Theme.font(.caption)).foregroundStyle(.secondary)
             }

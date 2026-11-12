@@ -27,7 +27,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
-	<string>YouFixIt asks idle apps to quit the normal way, so they can save first.</string>
+	<string>YouFixIt asks idle apps to quit the normal way so they can save first. When you press Empty Trash or Restart, it asks Finder to empty the Trash or opens the Restart window.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>© 2026 Yiftach Freeman.</string>
 </dict>

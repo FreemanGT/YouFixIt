@@ -7,6 +7,10 @@ enum Theme {
 
     static let tint = Color(light: NSColor(srgbRed: 0.090, green: 0.490, blue: 0.400, alpha: 1),
                             dark: NSColor(srgbRed: 0.098, green: 0.518, blue: 0.420, alpha: 1))
+    /// The accent as text (links, Keep, the words on a tonal pill): the fill colour is too dark to read on a dark card
+    /// (about 2:1), so dark mode lifts it to about 5:1.
+    static let tintText = Color(light: NSColor(srgbRed: 0.090, green: 0.490, blue: 0.400, alpha: 1),
+                                dark: NSColor(srgbRed: 0.400, green: 0.800, blue: 0.670, alpha: 1))
     /// The face under strain. Only ever a face colour, never a control.
     static let amber = Color(light: NSColor(srgbRed: 0.851, green: 0.604, blue: 0.169, alpha: 1),
                              dark: NSColor(srgbRed: 0.941, green: 0.706, blue: 0.271, alpha: 1))
@@ -144,7 +148,7 @@ struct PillStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(Theme.font(compact ? .small : .button))
-            .foregroundStyle(filled ? (enabled ? Theme.onAccent : Color.secondary) : Theme.tint)
+            .foregroundStyle(filled ? (enabled ? Theme.onAccent : Color.secondary) : Theme.tintText)
             .lineLimit(1)
             .padding(.horizontal, compact ? Theme.gap : 0)
             .frame(maxWidth: compact ? nil : .infinity)

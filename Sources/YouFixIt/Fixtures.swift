@@ -216,7 +216,7 @@ enum Fixtures {
             proc(3102, 3101, "node", path: node, ago: 399_990, mb: 5800),
             proc(3103, 3102, "node", path: node, ago: 399_000, mb: 400),
         ]
-        s.args[3100] = ["npm exec next dev --port 3120"]
+        s.args[3100] = ["npm exec next dev --port 3120", "", "", "", "", ""]   // npm's retitled command line, as it really reads
         s.cwd[3100] = "/Users/me/Ai Projects/Real Woo AI/.claude/worktrees/agent-afe14/platform/app"
         s.listening = [3102]
         s.ports = [3102: [3120]]
@@ -278,6 +278,36 @@ enum Fixtures {
             hold(90, "PreventSystemSleep", 8 * 3600), hold(4702, "PreventUserIdleSystemSleep", 1200),
         ]
         return s
+    }
+
+    /// Only Good to know rows with buttons, for the UI: an old simulator, the Trash, a menu bar app, a leftover database,
+    /// an app keeping the Mac awake.
+    static var offers: Spec {
+        var s = quiet
+        s.procs += mysqlOrphan.procs.filter { $0.pid == 4500 }
+        s.args.merge(mysqlOrphan.args) { a, _ in a }
+        s.procs += sleepBlocker.procs.filter { $0.pid == 4700 }
+        s.apps += sleepBlocker.apps.filter { $0.pid == 4700 }
+        s.assertions = sleepBlocker.assertions.filter { $0.pid == 4700 }
+        s.procs += menuBarApps.procs.filter { $0.pid == 8201 }
+        s.apps += menuBarApps.apps.filter { $0.pid == 8201 }
+        return s
+    }
+
+    static var offersDisk: DiskScan {
+        DiskScan(at: now, items: [
+            DiskScan.Item(kind: .trash, path: "/Users/me/.Trash", name: "Trash", bytes: 3100 << 20, modified: nil),
+            DiskScan.Item(kind: .runtime, path: "com.apple.CoreSimulator.SimRuntime.iOS-17-5", name: "iOS 17.5", bytes: 7 << 30, modified: nil),
+        ], unavailableSims: 0, freeBytes: 255 << 30, totalBytes: 926 << 30)
+    }
+
+    /// The disk side a mock runs with.
+    static func disk(named name: String) -> DiskScan? {
+        switch name {
+        case "heavy": disk
+        case "offers": offersDisk
+        default: nil
+        }
     }
 
     /// Everything at once, for the UI.
@@ -377,6 +407,7 @@ enum Fixtures {
         case "gradleDaemon": gradleDaemon
         case "sleepBlocker": sleepBlocker
         case "heavy": heavy
+        case "offers": offers
         case "calm": quiet
         default: nil
         }
@@ -392,7 +423,8 @@ func runSelfTest() {
         if !ok { failures += 1 }
         print((ok ? "  ok   " : "  FAIL ") + what)
     }
-    let t = Tuning.standard
+    // Everything on, "Close quiet ones" included, so every rule is exercised; the shipped default is checked on its own.
+    let t = { var t = Tuning.standard; t.closeQuietSessions = true; return t }()
     func ids(_ spec: Fixtures.Spec, keep: Set<String> = [], disk: DiskScan? = nil, tweak: (Int, inout Fixtures.Spec) -> Void = { _, _ in }) -> [Finding] {
         Rules.findings(history: Fixtures.history(spec, tweak: tweak), disk: disk, keep: keep, tuning: t)
     }
@@ -421,6 +453,13 @@ func runSelfTest() {
     check(Rules.command(["node", "--liftoff-only", "/Users/me/lib/codegraph.js"], fallback: "node") == "codegraph.js"
           && Rules.command(["node", "server.js"], fallback: "node") == "server.js" && Rules.command(["node"], fallback: "node") == "node",
           "flags before the script do not become the name")
+    check(Rules.command(["node", "-e", "require('http').createServer().listen(8998)"], fallback: "node") == "node"
+          && Rules.command(["python3", "-c", "import time; time.sleep(9)"], fallback: "python3") == "python3"
+          && Rules.command(["python3", "-u", "manage.py", "runserver"], fallback: "python3") == "manage.py runserver",
+          "inline code is never a name")
+    let framework = "/opt/homebrew/Cellar/python@3.14/3.14.7/Frameworks/Python.framework/Versions/3.14/Resources/Python.app/Contents/MacOS/Python"
+    check(Sampler.programName(framework) == "python3" && !Rules.insideApp(framework) && Rules.insideApp("/Applications/Stremio.app/Contents/MacOS/node"),
+          "Homebrew's Python is python3, not part of an app")
     check(acts(ids(Fixtures.expoOrphan) { _, s in
         s.procs.append(Fixtures.proc(61_356, 2646, "claude", ago: 12_000))
         s.procs = s.procs.map { $0.pid == 36644 ? Fixtures.proc(36644, 61_356, "node", path: $0.path, ago: 10_800, mb: 300) : $0 }
@@ -523,6 +562,8 @@ func runSelfTest() {
     } else {
         check(false, "the Claude row offers to close quiet sessions")
     }
+    let shipped = Rules.findings(history: Fixtures.history(Fixtures.claude9), disk: nil, keep: [], tuning: .standard).first { $0.id == "know:claude" }
+    check(shipped?.action == nil && shipped?.why.contains("sidebar") == true, "until Close quiet ones is switched on, the Claude row only explains")
     let allBusy = Dictionary(uniqueKeysWithValues: (0..<9).map { (60_000 + pid_t($0), Fixtures.now.addingTimeInterval(-60)) })
     let busySessions = ids(Fixtures.claude9) { _, s in s.quietSince = allBusy }.first { $0.id == "know:claude" }
     check(busySessions?.action == nil && busySessions?.why.contains("sidebar frees memory") == true, "with every session at work there is no button")

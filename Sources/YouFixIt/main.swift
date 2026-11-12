@@ -18,15 +18,18 @@ if let i = CommandLine.arguments.firstIndex(of: "--snapshot") {
     NSApplication.shared.run()
 }
 
-/// `--scan [--window N] [--apply ID [--then-undo] [--confirm]]`: sample this Mac and print findings as text.
+/// `--scan [--window N] [--apply ID [--then-undo] [--confirm]] [--explain PID]`: sample this Mac and print findings as text.
 /// KNOW+ rows are Good to know rows with a button; `--apply` runs one the way pressing it does (busy and recently used no
 /// longer hold it back). One that can't be undone, and Restart, also need `--confirm`.
 if CommandLine.arguments.contains("--scan") {
+    // Line by line, so a scan cut short (or piped to a file) never loses its last block.
+    setvbuf(stdout, nil, _IOLBF, 0)
     let args = CommandLine.arguments
     let window = args.firstIndex(of: "--window").flatMap { args.count > $0 + 1 ? TimeInterval(args[$0 + 1]) : nil }
     let apply = args.firstIndex(of: "--apply").flatMap { args.count > $0 + 1 ? args[$0 + 1] : nil }
     let thenUndo = args.contains("--then-undo")
     let confirmed = args.contains("--confirm")
+    let explain = args.firstIndex(of: "--explain").flatMap { args.count > $0 + 1 ? pid_t(args[$0 + 1]) : nil }
     NSApplication.shared.setActivationPolicy(.accessory)
     Task { @MainActor in
         let engine = Engine()
@@ -56,6 +59,16 @@ if CommandLine.arguments.contains("--scan") {
             if text != lastPrinted {
                 print(text)
                 lastPrinted = text
+            }
+            if let explain, let s, let p = s.procs[explain] {
+                // Why one process is, or is not, a row: everything the rules look at for it.
+                let h = engine.samples
+                let tree = s.tree(explain)
+                print("explain \(explain) \(p.name) \(p.path) ppid \(p.ppid) uid \(p.uid) age \(Int(s.at.timeIntervalSince(p.start)))s orphan \(Rules.orphans(s).contains { $0.pid == explain }) job \(s.jobs[explain] ?? "-") app \(s.app(explain)?.bundleID ?? "-")")
+                print("  tree \(tree.map { "\($0.pid):\($0.name)" }.joined(separator: " "))")
+                print("  listening \(tree.filter { s.listening.contains($0.pid) }.map(\.pid)) ports \(Rules.ports(of: tree, in: s)) clients \(tree.compactMap { q in s.clients[q.pid].map { "\(q.pid)=\($0)" } })")
+                print("  cpu idle-window \(String(format: "%.4f", Rules.avgCPU(explain, h, engine.tuning.idle))) max60 \(String(format: "%.4f", Rules.maxCPU(explain, h, 60))) spans \(Rules.spans(h, engine.tuning.idle)) footprint \(Format.size(s.footprint(of: explain)))")
+                print("  args \(s.args[explain] ?? []) cwd \(s.cwd[explain] ?? "-") key \(Rules.serverKey(p, in: s))")
             }
             if let apply, let target = engine.findings.first(where: { $0.id == apply && $0.offer }) {
                 if target.action?.irreversible == true || target.action == .restart, !confirmed {
