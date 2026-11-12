@@ -66,7 +66,13 @@ enum Copy {
     static let whyIdleVM = "No containers running, nothing using it"
     static let whyServiceIdle = "Nothing is using it. Stays off until you start it again."
     static func finishedWorktrees(_ project: String) -> String { "Finished worktrees in \(project)" }
-    static func whyFinishedWorktrees(_ n: Int) -> String { n == 1 ? "1 copy whose work is already merged" : "\(n) copies whose work is already merged" }
+    static func whyFinishedWorktrees(_ n: Int) -> String {
+        "\(n == 1 ? "1 copy" : "\(n) copies") whose work is already merged. \(sessionsNote(n))"
+    }
+    /// Moving a worktree takes its folder from any Claude session that used it; the session itself stays in the sidebar.
+    private static func sessionsNote(_ n: Int) -> String {
+        n == 1 ? "A Claude session that used it loses its folder." : "Claude sessions that used them lose their folders."
+    }
     static let npxName = "Old npx downloads"
     static func whyNpx(_ n: Int) -> String { "\(n == 1 ? "1 package" : "\(n) packages") unused for two weeks, npx fetches them again" }
     static let claudeTempName = "Claude scratch folders"
@@ -222,13 +228,14 @@ enum Copy {
     static func appCacheOpen(_ app: String) -> String { "\(app) keeps downloaded data here and fetches it again when needed. Quit \(app) first to clear it." }
     static func unmergedWorktrees(_ project: String) -> String { "Unmerged worktrees in \(project)" }
     static func whyUnmergedWorktrees(_ n: Int, local: Bool) -> String {
-        let copies = n == 1 ? "1 quiet copy" : "\(n) quiet copies"
-        return local ? "\(copies) with unmerged commits, which their branches keep. Local files git ignores go to the Trash with them."
-            : "\(copies) with commits that were never merged. Their branches keep the commits, so the folders can go."
+        let copies = n == 1 ? "1 copy" : "\(n) copies"
+        let kept = n == 1 ? "its branch keeps" : "their branches keep"
+        return local ? "\(copies) with unmerged commits \(kept), plus local files that go too. \(sessionsNote(n))"
+            : "\(copies) with unmerged commits, which \(kept). \(sessionsNote(n))"
     }
     static func localWorktrees(_ project: String) -> String { "Worktrees with local files in \(project)" }
     static func whyLocalWorktrees(_ n: Int) -> String {
-        "\(n == 1 ? "1 copy whose work is merged still holds" : "\(n) copies whose work is merged still hold") local files git ignores, like .env files. They go to the Trash too."
+        "\(n == 1 ? "1 merged copy" : "\(n) merged copies") holding local files like .env, which go to the Trash with \(n == 1 ? "it" : "them"). \(sessionsNote(n))"
     }
     static func dirtyWorktrees(_ project: String) -> String { "Worktrees with unsaved work in \(project)" }
     static func whyDirtyWorktrees(_ n: Int) -> String {

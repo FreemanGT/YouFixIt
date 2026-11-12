@@ -467,7 +467,8 @@ enum Rules {
         }
 
         // B7: Claude worktrees, one row per project and state. The scan only reports ones git has not touched for a day
-        // with nothing running inside; a session sitting in one now keeps it.
+        // with nothing running inside; a session sitting in one now keeps it. None is ever pre-selected: a Claude session
+        // in the sidebar may still use a quiet one, so each move is the user's call.
         let live = Array(s.cwd.values)
         let trees = d.items.filter { item in item.kind == .worktree && !live.contains { $0 == item.path || $0.hasPrefix(item.path + "/") } }
         func sum(_ items: [DiskScan.Item]) -> UInt64 { items.reduce(0) { $0 + $1.bytes } }
@@ -481,9 +482,9 @@ enum Rules {
             let unmerged = group.filter { $0.state == .unmerged || $0.state == .unmergedLocal }
             let dirty = group.filter { $0.state == .dirty }
             if !finished.isEmpty, sum(finished) >= t.diskMin {
-                rows.append(Finding(id: "worktrees:\(project)", keepKey: "worktrees:\(project)", group: .space, name: Copy.finishedWorktrees(name),
-                                    why: Copy.whyFinishedWorktrees(finished.count), bytes: sum(finished), action: .trashAll(targets(finished, .mergedWorktree)),
-                                    undoLabel: Copy.putBack, link: nil, iconPath: nil, symbol: "arrow.triangle.branch"))
+                know("worktrees-finished:\(project)", Copy.finishedWorktrees(name), Copy.whyFinishedWorktrees(finished.count), "arrow.triangle.branch",
+                     bytes: sum(finished), link: folder("\(project)/.claude/worktrees"), action: .trashAll(targets(finished, .mergedWorktree)),
+                     undo: Copy.putBack)
             }
             if !local.isEmpty, sum(local) >= t.diskMin {
                 know("worktrees-local:\(project)", Copy.localWorktrees(name), Copy.whyLocalWorktrees(local.count), "arrow.triangle.branch",

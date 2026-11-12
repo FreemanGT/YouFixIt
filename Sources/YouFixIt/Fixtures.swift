@@ -744,13 +744,17 @@ func runSelfTest() {
 
     print("worktrees and downloads")
     let more = ids(Fixtures.simIdle, disk: Fixtures.diskMore) { _, s in s.cwd[60_000] = "\(Fixtures.worktrees)/agent-a3/platform" }
-    let finished = row(more, "worktrees:")
+    let finished = row(more, "know:worktrees-finished:")
     if case .trashAll(let targets) = finished?.action {
-        check(finished?.actionable == true && targets.map(\.path) == ["\(Fixtures.worktrees)/agent-a1", "\(Fixtures.worktrees)/agent-a2"] && targets.allSatisfy { $0.check == .mergedWorktree },
-              "finished worktrees are one Tidy up row, the one a session sits in left out: \(targets.map(\.path))")
+        check(finished?.offer == true && targets.map(\.path) == ["\(Fixtures.worktrees)/agent-a1", "\(Fixtures.worktrees)/agent-a2"]
+              && targets.allSatisfy { $0.check == .mergedWorktree },
+              "finished worktrees are offered, the one a session sits in left out: \(targets.map(\.path))")
     } else {
-        check(false, "finished worktrees are one Tidy up row")
+        check(false, "finished worktrees are offered in Good to know")
     }
+    check(!acts(more).contains { $0.contains("worktrees") } && !acts(ids(Fixtures.heavy, disk: Fixtures.disk)).contains { $0.contains("worktrees") },
+          "no worktree is ever a Tidy up row: a Claude session may still use it")
+    check(finished?.why.contains("Claude sessions that used them lose their folders") == true, "and the row says so: \(finished?.why ?? "")")
     check(finished?.name == "Finished worktrees in Real Woo AI" && finished?.bytes == 1600 << 20, "named after the project, sized by what goes: \(finished?.name ?? "") \(finished?.bytes ?? 0)")
     check(offers(more, "know:worktrees-unmerged:"), "unmerged ones are offered, never selected")
     if case .trashAll(let targets) = row(more, "know:worktrees-unmerged:")?.action {
@@ -758,7 +762,7 @@ func runSelfTest() {
     } else {
         check(false, "unmerged worktrees move as one")
     }
-    check(row(more, "know:worktrees-unmerged:")?.why.contains("Local files") == true, "and the row says local files go with them")
+    check(row(more, "know:worktrees-unmerged:")?.why.contains("local files that go too") == true, "and the row says local files go with them")
     let localRow = row(more, "know:worktrees-local:")
     if case .trashAll(let targets) = localRow?.action {
         check(localRow?.offer == true && targets.map(\.path) == ["\(Fixtures.worktrees)/env-d1"] && targets.allSatisfy { $0.check == .worktree },
@@ -826,7 +830,8 @@ func runSelfTest() {
     let everything = ids(Fixtures.heavy, disk: Fixtures.disk) + ids(Fixtures.simIdle, disk: Fixtures.diskMore) + ids(Fixtures.busyProgram) + ids(Fixtures.mysqlOrphan)
         + ids(Fixtures.sleepBlocker) + ids(Fixtures.phpSwarm) + ids(Fixtures.expoOrphan) { _, s in s.listening = [] }
     let withButton = ["know:claude", "know:menubar:", "know:busy:", "know:db:", "know:awake:", "know:cache:", "know:appcache:", "know:trash",
-                      "know:runtime:", "know:device:", "know:worktrees-unmerged:", "know:worktrees-local:", "know:leftover"]
+                      "know:runtime:", "know:device:", "know:worktrees-finished:", "know:worktrees-unmerged:", "know:worktrees-local:",
+                      "know:leftover"]
     let explainOnly = ["know:tabs:", "know:spotlight", "know:memory", "know:backlog", "know:worktrees-dirty:"]
     for prefix in withButton {
         let rows = everything.filter { $0.id.hasPrefix(prefix) }
