@@ -306,6 +306,7 @@ enum Fixtures {
         switch name {
         case "heavy": disk
         case "offers": offersDisk
+        case "worktrees": diskMore
         default: nil
         }
     }
@@ -410,7 +411,7 @@ enum Fixtures {
         case "sleepBlocker": sleepBlocker
         case "heavy": heavy
         case "offers": offers
-        case "calm": quiet
+        case "calm", "worktrees": quiet
         default: nil
         }
     }
@@ -879,6 +880,46 @@ func runSelfTest() {
     check(hung.result == nil && hung.took < 3, "a tool past its timeout comes back as unknown, on time: \(hung.took)")
     let held = runTool("/bin/sh", ["-c", "sleep 4 & echo hi"], timeout: 1)
     check(held.result == nil && held.took < 3, "so does one whose own child keeps its output open: \(held.took)")
+
+    print("ask claude")
+    let home = "/Users/me"
+    check(Ask.tilde("/Users/me/Library/Caches/pip", home: home) == "~/Library/Caches/pip" && Ask.tilde("/Users/meredith/x", home: home) == "/Users/meredith/x"
+          && Ask.tilde("/private/tmp/claude-501/-Users-me-Saves/s1", home: home) == "/private/tmp/claude-501/~-Saves/s1",
+          "the home folder reads as ~, and only the home folder")
+    let shared = Ask.commandLine(["node", "/Users/me/app/server.js", "--port=3000", "--password", "hunter2", "--api-key=abc123", "postgres://u:pw@db.local/x",
+                                  "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx0123", "PGPASSWORD=xyz", "npm run dev --authToken=qq"], home: home)
+    check(["hunter2", "abc123", "u:pw", "AbCdEf", "xyz", "qq"].allSatisfy { !shared.contains($0) } && shared.contains("node ~/app/server.js --port=3000")
+          && shared.contains("postgres://…@db.local/x") && shared.contains("--api-key=…"), "a command line keeps its shape and loses its secrets: \(shared)")
+    let expoRow = ids(Fixtures.expoOrphan).first { $0.id.hasPrefix("orphan:") }
+    let one = expoRow.map { Ask.question([$0], sample: Fixtures.history(Fixtures.expoOrphan).last, home: home) } ?? ""
+    check(one.hasPrefix(Copy.askOne) && one.contains("\n\(expoRow?.name ?? "-")\n") && one.contains(Copy.askSays(expoRow?.why ?? "-"))
+          && one.contains(Copy.askButton(expoRow?.action)) && one.contains("Command: node ~/Saves/node_modules/.bin/expo start --port 8081") && one.hasSuffix(Copy.askEnd),
+          "one row's question says what it is, why it is listed, what its button does and the command behind it")
+    let finishedTrees = row(more, "know:worktrees-finished:")
+    let treeQuestion = finishedTrees.map { Ask.question([$0], sample: nil, home: home) } ?? ""
+    check(treeQuestion.contains("Folders: 2, in ~/Ai Projects/Real Woo AI/.claude/worktrees. The biggest: agent-a1 (900 MB), agent-a2 (700 MB).")
+          && treeQuestion.contains("of disk space") && treeQuestion.contains(Copy.askButton(finishedTrees?.action)),
+          "a worktree row names the folder its copies share, from ~, and the biggest ones")
+    check(Ask.question([finishedTrees, finishedTrees].compactMap { $0 }, sample: nil, home: home).contains("Folders: 2, in ~/Ai Projects/Real Woo AI/.claude/worktrees.\n"),
+          "among many rows it only counts them")
+    check(Ask.commonParent(["/a/b/c1", "/a/b/x/c2"]) == "/a/b" && Ask.commonParent(["/a/b/c1", "/d/c2"]) == "/", "the shared folder is the deepest one holding them all")
+    let tricky = one + " a+b & c=d #e %f 100%"
+    let link = Ask.url(tricky, app: true)
+    let query = URLComponents(url: link, resolvingAgainstBaseURL: false)?.queryItems ?? []
+    check(link.scheme == "claude" && link.host == "claude.ai" && link.path == "/new" && query.first { $0.name == "q" }?.value == tricky
+          && query.contains { $0.name == "surface" && $0.value == "chat" } && !link.absoluteString.contains("+"), "the question rides whole in the Claude app's own new-chat link")
+    check(Ask.url("hi there", app: false).absoluteString == "https://claude.ai/new?q=hi%20there", "without the Claude app it opens claude.ai")
+    let all = Ask.question(everything, sample: Fixtures.history(Fixtures.heavy).last, home: home)
+    check(all.count <= Ask.limit && all.hasPrefix(Copy.askMany(everything.count)) && all.contains("\n\n1. ") && all.hasSuffix(Copy.askEnd),
+          "every row at once fits one message: \(all.count) characters for \(everything.count) rows")
+    check(!all.contains("—") && !all.contains("!") && !all.contains("/Users/me"), "the question is plain words and never names the home folder")
+    let lots = Ask.question(Array(repeating: everything, count: 4).flatMap { $0 }, sample: nil, home: home)
+    check(lots.count <= Ask.limit && lots.contains(" more that didn't fit"), "rows past the limit are counted, not dropped quietly: \(lots.count)")
+    let buttons: [Finding.Action?] = [nil, .emptyTrash, .restart, .stopBackup, .deleteRuntime(id: "x"), .deleteDevice(udid: "y"), .endSessions([]), .trashAll([]),
+                                      .sigtermAll([]), .trash(path: "/x"), .shutdownSim(udid: "u"), .deleteUnavailableSims]
+    check(buttons.allSatisfy { let s = Copy.askButton($0); return !s.contains("—") && !s.contains("!") && s.hasSuffix(".") }, "every button is told in plain words")
+    check([Finding.Action.emptyTrash, .deleteRuntime(id: "x"), .deleteDevice(udid: "y"), .deleteUnavailableSims].allSatisfy { Copy.askButton($0).contains("for good") },
+          "a button that deletes for good says so")
 
     print("wording")
     check(Format.size(1300 << 20) == "1.3 GB" && Format.size(900 << 20) == "900 MB" && Format.size(22 << 30) == "22 GB" && Format.size(9 << 30) == "9 GB",

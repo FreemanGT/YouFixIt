@@ -188,4 +188,6 @@ struct PillLabel: View {
 @MainActor
 enum Render {
     static var offscreen = false
+    /// Snapshots draw every row as if the pointer were over it, to show the controls that appear on hover.
+    static var hoverAll = false
 }

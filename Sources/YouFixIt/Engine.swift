@@ -117,6 +117,8 @@ final class Engine {
     /// The samples the rules judge by, oldest first (for `--scan --explain`).
     var samples: [Sample] { history }
     var trashed: UInt64 { UInt64(ledger.values.reduce(0.0) { $0 + ($1.first ?? 0) }) }
+    /// The disk side has been measured at least once (for `--scan --ask all`).
+    var diskReady: Bool { disk != nil }
 
     // MARK: - Life cycle
 
@@ -500,6 +502,13 @@ final class Engine {
             return
         }
         disk = DiskScan(at: d.at, items: items, unavailableSims: unavailable, freeBytes: free, totalBytes: d.totalBytes)
+    }
+
+    // MARK: - Ask Claude
+
+    /// A new Claude chat about these rows, with the question filled in. Nothing on the Mac changes.
+    func ask(_ rows: [Finding]) {
+        Ask.open(rows, sample: history.last)
     }
 
     // MARK: - Keep, pause

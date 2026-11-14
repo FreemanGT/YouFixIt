@@ -1,12 +1,14 @@
 import AppKit
 import SwiftUI
 
-/// One suggestion as a card: a round check, what it is, why, Keep on hover, and what it frees.
+/// One suggestion as a card: a round check, what it is, why, Ask and Keep on hover, and what it frees.
 struct FindingRow: View {
     let finding: Finding
     @Bindable var engine: Engine
     @State private var hovering = false
 
+    /// The pointer is over the card (snapshots can draw every card that way).
+    private var hovered: Bool { hovering || Render.hoverAll }
     private var outcome: Outcome? { engine.progress[finding.id] }
     private var closing: Bool { engine.isWorking && outcome == nil && engine.selected.contains(finding.id) }
     private var selected: Bool { engine.selected.contains(finding.id) }
@@ -27,7 +29,7 @@ struct FindingRow: View {
         .padding(.horizontal, Theme.gap)
         .padding(.vertical, Theme.cardPad)
         .frame(minHeight: Theme.cardHeight)
-        .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(hovering && pending ? Theme.cardHover : Theme.card))
+        .background(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous).fill(hovered && pending ? Theme.cardHover : Theme.card))
         .opacity(pending && !selected ? 0.55 : 1)
         .contentShape(RoundedRectangle(cornerRadius: Theme.cardRadius, style: .continuous))
         .onTapGesture { if pending { toggle() } }
@@ -35,6 +37,13 @@ struct FindingRow: View {
         .animation(.easeOut(duration: Theme.feedback), value: selected)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(a11y)
+        // Controls hidden until hover are left out of the accessibility tree, so VoiceOver gets them as actions.
+        .accessibilityActions {
+            if pending {
+                Button(Copy.a11yAsk(finding.name)) { engine.ask([finding]) }
+                Button(Copy.a11yKeep(finding.name)) { engine.keep(finding) }
+            }
+        }
     }
 
     private func toggle() {
@@ -79,7 +88,8 @@ struct FindingRow: View {
         }
     }
 
-    /// The size sits in a small capsule; Keep takes its place while the pointer is over the card (and is always there for VoiceOver).
+    /// The size sits in a small capsule; Ask and Keep take its place while the pointer is over the card (VoiceOver has them
+    /// as actions of the card).
     @ViewBuilder private var trailing: some View {
         ZStack(alignment: .trailing) {
             if finding.bytes > 0 {
@@ -87,16 +97,19 @@ struct FindingRow: View {
                     .font(Theme.font(.caption)).foregroundStyle(.secondary).fixedSize()
                     .padding(.horizontal, Theme.row).padding(.vertical, Theme.tight)
                     .background(Capsule().fill(Theme.pill))
-                    .opacity(hovering && pending ? 0 : 1)
+                    .opacity(hovered && pending ? 0 : 1)
             }
             if pending {
-                Button(Copy.keep) { engine.keep(finding) }
-                    .buttonStyle(.plain)
-                    .font(Theme.font(.bodyStrong))
-                    .foregroundStyle(Theme.tintText)
-                    .opacity(hovering ? 1 : 0)
-                    .help(Copy.keepTip(finding.name))
-                    .accessibilityLabel(Copy.a11yKeep(finding.name))
+                HStack(spacing: Theme.row) {
+                    AskButton(name: finding.name) { engine.ask([finding]) }
+                    Button(Copy.keep) { engine.keep(finding) }
+                        .buttonStyle(.plain)
+                        .font(Theme.font(.bodyStrong))
+                        .foregroundStyle(Theme.tintText)
+                        .help(Copy.keepTip(finding.name))
+                        .accessibilityLabel(Copy.a11yKeep(finding.name))
+                }
+                .opacity(hovered ? 1 : 0)
             }
         }
     }
@@ -119,12 +132,14 @@ struct FindingRow: View {
 }
 
 /// A Good to know row: a symbol, a name, the plain reason, and what can be done about it. A button when the app can do
-/// it for you (never selected, never part of Tidy up, only done when pressed), a link when only you can.
+/// it for you (never selected, never part of Tidy up, only done when pressed), a link when only you can. Ask and Hide
+/// show while the pointer is over it.
 struct KnowRow: View {
     let finding: Finding
     @Bindable var engine: Engine
     @State private var hovering = false
 
+    private var hovered: Bool { hovering || Render.hoverAll }
     private var outcome: Outcome? { engine.knowOutcome[finding.id] }
     private var running: Bool { engine.acting == finding.id }
     private var confirming: Bool { engine.confirming == finding.id }
@@ -142,19 +157,15 @@ struct KnowRow: View {
             VStack(alignment: .leading, spacing: Theme.hair) {
                 HStack(spacing: Theme.row) {
                     Text(finding.name).font(Theme.font(.bodyStrong)).lineLimit(1)
-                    if finding.bytes > 0 {
-                        Text(Format.size(finding.bytes)).font(Theme.font(.caption)).foregroundStyle(.secondary).fixedSize()
-                    }
+                        // Ask and Hide only show on hover, which leaves them out of the accessibility tree; here they are actions.
+                        .accessibilityActions {
+                            if controls {
+                                Button(Copy.a11yAsk(finding.name)) { engine.ask([finding]) }
+                                Button(Copy.a11yHide(finding.name)) { engine.keep(finding) }
+                            }
+                        }
                     Spacer(minLength: Theme.tight)
-                    if outcome == nil, !running, !confirming {
-                        Button(Copy.hide) { engine.keep(finding) }
-                            .buttonStyle(.plain)
-                            .font(Theme.font(.caption))
-                            .foregroundStyle(Theme.tintText)
-                            .opacity(hovering ? 1 : 0)
-                            .help(Copy.hideTip(finding.name))
-                            .accessibilityLabel(Copy.a11yHide(finding.name))
-                    }
+                    trailing
                 }
                 Text(why)
                     .font(Theme.font(.caption))
@@ -169,6 +180,32 @@ struct KnowRow: View {
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
         .accessibilityElement(children: .contain)
+    }
+
+    /// Ask and Hide are on offer: not while the row's button runs, asks to confirm, or says how it went.
+    private var controls: Bool { outcome == nil && !running && !confirming }
+
+    /// The size at the end of the name line, as on the cards above; Ask and Hide take its place while the pointer is over
+    /// the row (VoiceOver has them as actions of the name).
+    @ViewBuilder private var trailing: some View {
+        ZStack(alignment: .trailing) {
+            if finding.bytes > 0 {
+                Text(Format.size(finding.bytes)).font(Theme.font(.caption)).foregroundStyle(.secondary).fixedSize()
+                    .opacity(hovered && controls ? 0 : 1)
+            }
+            if controls {
+                HStack(spacing: Theme.row) {
+                    AskButton(name: finding.name, step: .caption) { engine.ask([finding]) }
+                    Button(Copy.hide) { engine.keep(finding) }
+                        .buttonStyle(.plain)
+                        .font(Theme.font(.caption))
+                        .foregroundStyle(Theme.tintText)
+                        .help(Copy.hideTip(finding.name))
+                        .accessibilityLabel(Copy.a11yHide(finding.name))
+                }
+                .opacity(hovered ? 1 : 0)
+            }
+        }
     }
 
     @ViewBuilder private var actions: some View {

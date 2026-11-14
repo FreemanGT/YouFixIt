@@ -243,6 +243,64 @@ enum Copy {
     }
     static func lowDisk(_ free: UInt64) -> String { "Only \(Format.size(free)) of space is left. The things above are the quickest way to make room." }
 
+    // Ask Claude. The question is plain text for Claude, and for anyone who reads it before it is sent.
+    static let askAll = "Ask Claude"
+    static let askAllTip = "Ask Claude about everything listed here"
+    static let askTip = "Ask Claude what this is and whether it's safe to let go"
+    static let askOne = "YouFixIt, a menu bar app that tidies my Mac, listed the item below. In plain words: what is it, and is it safe for me to let it go?"
+    static func askMany(_ n: Int) -> String {
+        "YouFixIt, a menu bar app that tidies my Mac, listed the \(n) items below. For each one, in plain words: what is it, and is it safe for me to let it go? "
+            + "Start each answer with a verdict: safe to let go, check first, or keep. For something that is only information, say what it means."
+    }
+    static let askHow = "How YouFixIt acts: folders it clears go to the Trash first, apps are quit the normal way so they can ask to save, programs get a polite stop signal, "
+        + "and nothing is ever force-quit. Only buttons that say so delete anything for good."
+    static let askEnd = "Tell me what I would lose and what to check first, if anything. Keep it short. I'll act with YouFixIt's own buttons."
+    static func askMore(_ n: Int) -> String { "And \(n) more that didn't fit in this message." }
+    static func askWhere(_ group: Finding.Group, bytes: UInt64, disk: Bool) -> String {
+        let place = switch group {
+        case .running: "Suggested to close, under Running now."
+        case .space: "Suggested to clear, under Taking up space."
+        case .know: "Mentioned under Good to know."
+        }
+        guard bytes > 0 else { return place }
+        return "\(place) \(disk ? "Takes about \(Format.size(bytes)) of disk space." : "Holds about \(Format.size(bytes)) of memory.")"
+    }
+    static func askSays(_ why: String) -> String { "YouFixIt says: \(why)" }
+    /// What the row's own button would do, in the words of its done line and its confirm.
+    static func askButton(_ action: Finding.Action?) -> String {
+        switch action {
+        case nil: "It has no button. YouFixIt only explains it."
+        case .quitApp: "Its button quits the app the normal way. It can be opened again."
+        case .shutdownSim: "Its button shuts the simulator down. It can be started again."
+        case .sigterm: "Its button asks the program to stop."
+        case .sigtermAll(let targets): targets.count == 1 ? "Its button asks the program to stop." : "Its button asks each of these programs to stop."
+        case .endSessions: "Its button closes the quiet Claude sessions. Their chats are kept."
+        case .stopService: "Its button stops the Homebrew service and takes it off the login list. It can be started again."
+        case .trash: "Its button moves the folder to the Trash."
+        case .trashAll(let targets): targets.count == 1 ? "Its button moves the folder to the Trash." : "Its button moves these folders to the Trash."
+        case .deleteUnavailableSims: "Its button removes these simulators for good."
+        case .stopBackup: "Its button skips this backup. The next one runs on schedule."
+        case .restart: "Its button opens the Mac's Restart window, which still asks first."
+        case .emptyTrash: "Its button empties the Trash for good, everything in it, not only what YouFixIt put there."
+        case .deleteRuntime: "Its button deletes this simulator runtime for good. Xcode can download it again."
+        case .deleteDevice: "Its button deletes this simulator and the apps and data on it for good."
+        }
+    }
+    static func askCommand(_ line: String) -> String { "Command: \(line)" }
+    static func askPorts(_ ports: [Int]) -> String {
+        ports.count == 1 ? "Listens on port \(ports[0])" : "Listens on ports \(ports.map { String($0) }.joined(separator: ", "))"
+    }
+    static func askCwd(_ path: String) -> String { "Working folder: \(path)" }
+    static func askSince(_ date: Date) -> String { "Running since \(Format.clock(date))" }
+    static func askApp(_ bundleID: String, path: String?) -> String { path.map { "App: \(bundleID), at \($0)" } ?? "App: \(bundleID)" }
+    static func askFolder(_ path: String) -> String { "Folder: \(path)" }
+    /// "Folders: 43, in ~/Ai Projects/Shop/.claude/worktrees. The biggest: agent-a1 (3 GB), site-v2 (2.6 GB)".
+    static func askFolders(_ n: Int, in parent: String, biggest: [String]) -> String {
+        "Folders: \(n), in \(parent)." + (biggest.isEmpty ? "" : " The biggest: \(biggest.joined(separator: ", ")).")
+    }
+    static func askRuntime(_ id: String) -> String { "Runtime: \(id)" }
+    static func askAndMore(_ n: Int) -> String { "And \(n) more like these" }
+
     // Footer and settings.
     static func checked(ago: Date?) -> String { ago.map { "Checked \(Format.ago($0))" } ?? "Checking…" }
     static func pausedUntil(_ date: Date) -> String { "Paused until \(Format.clock(date))" }
@@ -284,6 +342,7 @@ enum Copy {
     static func a11yInclude(_ name: String, _ bytes: UInt64) -> String { "Include \(name), about \(Format.size(bytes))" }
     static func a11yKeep(_ name: String) -> String { "Keep \(name), never suggest it" }
     static func a11yHide(_ name: String) -> String { "Hide \(name), never mention it" }
+    static func a11yAsk(_ name: String) -> String { "Ask Claude about \(name)" }
     static func a11yAct(_ verb: String, _ name: String) -> String { "\(verb.replacingOccurrences(of: "…", with: "")) \(name)" }
     static func a11yTidy(_ n: Int, _ bytes: UInt64) -> String { "Tidy up \(things(n)), frees about \(Format.size(bytes))" }
     static func a11yClosing(_ name: String) -> String { "\(name), closing" }

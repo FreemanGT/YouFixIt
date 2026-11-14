@@ -18,9 +18,10 @@ if let i = CommandLine.arguments.firstIndex(of: "--snapshot") {
     NSApplication.shared.run()
 }
 
-/// `--scan [--window N] [--apply ID [--then-undo] [--confirm]] [--explain PID]`: sample this Mac and print findings as text.
-/// KNOW+ rows are Good to know rows with a button; `--apply` runs one the way pressing it does (busy and recently used no
-/// longer hold it back). One that can't be undone, and Restart, also need `--confirm`.
+/// `--scan [--window N] [--apply ID [--then-undo] [--confirm]] [--explain PID] [--ask ID|all [--open]]`: sample this Mac and
+/// print findings as text. KNOW+ rows are Good to know rows with a button; `--apply` runs one the way pressing it does (busy
+/// and recently used no longer hold it back). One that can't be undone, and Restart, also need `--confirm`. `--ask` prints
+/// the question Ask Claude would hand over for one row, or for every row once the disk is measured; `--open` also opens it.
 if CommandLine.arguments.contains("--scan") {
     // Line by line, so a scan cut short (or piped to a file) never loses its last block.
     setvbuf(stdout, nil, _IOLBF, 0)
@@ -30,6 +31,8 @@ if CommandLine.arguments.contains("--scan") {
     let thenUndo = args.contains("--then-undo")
     let confirmed = args.contains("--confirm")
     let explain = args.firstIndex(of: "--explain").flatMap { args.count > $0 + 1 ? pid_t(args[$0 + 1]) : nil }
+    let ask = args.firstIndex(of: "--ask").flatMap { args.count > $0 + 1 ? args[$0 + 1] : nil }
+    let openAsk = args.contains("--open")
     NSApplication.shared.setActivationPolicy(.accessory)
     Task { @MainActor in
         let engine = Engine()
@@ -70,6 +73,21 @@ if CommandLine.arguments.contains("--scan") {
                 print("  cpu idle-window \(String(format: "%.4f", Rules.avgCPU(explain, h, engine.tuning.idle))) max60 \(String(format: "%.4f", Rules.maxCPU(explain, h, 60))) spans \(Rules.spans(h, engine.tuning.idle)) footprint \(Format.size(s.footprint(of: explain)))")
                 print("  args \(s.args[explain] ?? []) cwd \(s.cwd[explain] ?? "-") key \(Rules.serverKey(p, in: s))")
             }
+            if let ask {
+                let rows = ask == "all" ? engine.findings : engine.findings.filter { $0.id == ask }
+                let ready = ask == "all" ? engine.diskReady && Rules.spans(engine.samples, engine.tuning.idle) : !rows.isEmpty
+                if ready {
+                    guard !rows.isEmpty else { print("nothing to ask about"); exit(0) }
+                    let q = Ask.question(rows, sample: s)
+                    print("question for \(rows.count) \(rows.count == 1 ? "row" : "rows"), \(q.count) characters, app link \(Ask.url(q, app: true).absoluteString.count) characters:\n")
+                    print(q)
+                    if openAsk {
+                        engine.ask(rows)
+                        print("\nopened a new Claude chat with it")
+                    }
+                    exit(0)
+                }
+            }
             if let apply, let target = engine.findings.first(where: { $0.id == apply && $0.offer }) {
                 if target.action?.irreversible == true || target.action == .restart, !confirmed {
                     print("\(target.id) can't be taken back; add --confirm to run it")
@@ -99,8 +117,8 @@ if CommandLine.arguments.contains("--scan") {
                 }
                 exit(0)
             }
-            if let apply, Date().timeIntervalSince(started) > (window ?? 600) * 2 + 120 {
-                print("gave up waiting for \(apply)")
+            if let waiting = apply ?? ask, Date().timeIntervalSince(started) > (window ?? 600) * 2 + 120 {
+                print("gave up waiting for \(waiting)")
                 exit(1)
             }
         }

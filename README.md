@@ -8,6 +8,8 @@ It watches quietly. When something you are not using is weighing the Mac down, t
 
 **Good to know** explains the rest, and most rows there come with a button of their own for when you decide: Stop a database or program a coding session left running, a busy program, or a Homebrew service that is in use; Quit a menu bar app holding memory, or an app that has kept the Mac awake for an hour; Move a big app cache, a tool folder that needs reinstalling, or Claude Code worktrees nothing has touched for a day to the Trash (merged ones, ones that still hold local files such as an .env, and unmerged ones whose branches keep the commits; never selected for you, because a Claude session may still use one); Skip a Time Machine backup; open the Restart window after a long uptime; Empty the Trash; remove an old simulator or test iPhone. Nothing there is ever selected for you, and the buttons that delete for good ask first, right in the row. Spotlight and Photos indexing, software updates, browsers with many tabs, open Claude coding sessions, virtual machines, memory pressure, thermal throttling, apps that open at login and worktrees with uncommitted changes are only explained, with a link to where you can act.
 
+**Ask Claude** is on every row (the sparkle that shows on hover, next to Keep or Hide) and in the footer for everything at once. It opens a new Claude chat, in the Claude app or on claude.ai, with the question already written: what the thing is, what YouFixIt's button would do, and the folders or command lines behind it, so Claude can tell you whether it is safe to let go. Your home folder shows as ~, and anything that looks like a password or a token is blanked out. Claude only gets the question; nothing on the Mac changes until you press one of YouFixIt's own buttons.
+
 It never force-quits, never deletes anything on its own, never touches anything owned by macOS or another user, never closes what is in front of you, playing audio or showing a dialog, never stops something busy with CPU or disk work unless you press that row's own button, and never moves a folder something wrote into in the last ten minutes.
 
 ## Build
@@ -21,10 +23,11 @@ swift build               # debug build for iteration
 .build/debug/YouFixIt --scan --window 60   # watch this Mac from the terminal; N shrinks the idle thresholds
 .build/debug/YouFixIt --scan --window 60 --apply ID --then-undo   # run one row's action, then take it back
 .build/debug/YouFixIt --scan --window 60 --explain PID            # why a process is, or is not, a row
+.build/debug/YouFixIt --scan --window 60 --ask all                # the question Ask Claude would send, printed
 .build/debug/YouFixIt --mock heavy         # run the UI on a fixture
 .build/debug/YouFixIt --snapshot snapshots # render every state to PNG, light and dark
 ./build.sh dmg                             # dist/YouFixIt.dmg
 ./build.sh release                         # Developer ID signed, notarized, stapled
 ```
 
-macOS 14.4 or newer. Not sandboxed: it has to see other processes to help with them. No network, no account, no analytics.
+macOS 14.4 or newer. Not sandboxed: it has to see other processes to help with them. No network, no account, no analytics: Ask Claude hands its question to the Claude app or to claude.ai in your browser, and YouFixIt itself never goes online.

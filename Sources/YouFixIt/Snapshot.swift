@@ -15,6 +15,7 @@ enum Snapshot {
         var kept = false
         var confirm: String? = nil      // a Good to know row showing its "can't be undone" confirm
         var act: String? = nil          // a Good to know row whose button was pressed
+        var hover = false               // every row as if the pointer were over it (Ask, Keep, Hide)
     }
 
     private static let scenes: [Scene] = [
@@ -27,6 +28,10 @@ enum Snapshot {
         Scene(name: "know-confirm", mock: "offers", knowOpen: true, confirm: "know:trash"),
         Scene(name: "know-undo", mock: "offers", knowOpen: true, act: "know:menubar:com.raycast.macos"),
         Scene(name: "busy", mock: "busyProgram", knowOpen: true),
+        Scene(name: "hover-ask", mock: "heavy", knowOpen: true, hover: true),
+        Scene(name: "hover-know", mock: "offers", knowOpen: true, hover: true),
+        Scene(name: "worktrees", mock: "worktrees", knowOpen: true),
+        Scene(name: "hover-worktrees", mock: "worktrees", knowOpen: true, hover: true),
         Scene(name: "kept-undo-line", mock: "heavy", kept: true),
         Scene(name: "working-mid", mock: "heavy", working: true),
         Scene(name: "done", mock: "heavy", done: true),
@@ -64,6 +69,8 @@ enum Snapshot {
     private static let appearances: [(String, NSAppearance.Name)] = [("light", .aqua), ("dark", .darkAqua)]
 
     private static func render(_ scene: Scene, engine: Engine, appearance: (String, NSAppearance.Name), into dir: URL) -> Bool {
+        Render.hoverAll = scene.hover
+        defer { Render.hoverAll = false }
         let view = PopoverView(engine: engine, pane: scene.pane, knowOpen: scene.knowOpen)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Theme.separator, lineWidth: 1))

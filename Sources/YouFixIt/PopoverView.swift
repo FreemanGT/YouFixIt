@@ -271,6 +271,11 @@ struct MainPane: View {
 
     // MARK: - Footer
 
+    /// Ask Claude about every row at once, whenever there are rows and nothing is running or paused.
+    private var askAll: Bool {
+        !engine.findings.isEmpty && ![.paused, .working, .done].contains(engine.mood)
+    }
+
     private var footer: some View {
         HStack(spacing: Theme.row) {
             if engine.mood == .paused, let until = engine.pausedUntil {
@@ -280,6 +285,12 @@ struct MainPane: View {
                 Text(Copy.checked(ago: engine.lastScan)).font(Theme.font(.caption)).foregroundStyle(.secondary)
             }
             Spacer()
+            if askAll {
+                Button { engine.ask(engine.findings) } label: { Label(Copy.askAll, systemImage: AskButton.symbol) }
+                    .buttonStyle(.link).labelStyle(.titleAndIcon)
+                    .foregroundStyle(Theme.tintText).font(Theme.font(.caption))
+                    .help(Copy.askAllTip).accessibilityLabel(Copy.askAllTip)
+            }
             if engine.mood != .paused {
                 Button { engine.pause(for: 3600) } label: { Image(systemName: "pause.circle").font(.system(size: Theme.iconButton)).frame(width: 24, height: 24) }
                     .buttonStyle(.plain).foregroundStyle(.secondary).help(Copy.pauseTip).accessibilityLabel(Copy.pauseTip)
