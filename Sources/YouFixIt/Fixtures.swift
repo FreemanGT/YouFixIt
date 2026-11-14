@@ -883,13 +883,31 @@ func runSelfTest() {
 
     print("ask claude")
     let home = "/Users/me"
-    check(Ask.tilde("/Users/me/Library/Caches/pip", home: home) == "~/Library/Caches/pip" && Ask.tilde("/Users/meredith/x", home: home) == "/Users/meredith/x"
-          && Ask.tilde("/private/tmp/claude-501/-Users-me-Saves/s1", home: home) == "/private/tmp/claude-501/~-Saves/s1",
-          "the home folder reads as ~, and only the home folder")
-    let shared = Ask.commandLine(["node", "/Users/me/app/server.js", "--port=3000", "--password", "hunter2", "--api-key=abc123", "postgres://u:pw@db.local/x",
-                                  "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx0123", "PGPASSWORD=xyz", "npm run dev --authToken=qq"], home: home)
+    check(Redact.tilde("/Users/me/Library/Caches/pip", home: home) == "~/Library/Caches/pip" && Redact.tilde("/Users/meredith/x", home: home) == "/Users/meredith/x"
+          && Redact.tilde("/private/tmp/claude-501/-Users-me-Saves/s1", home: home) == "/private/tmp/claude-501/~-Saves/s1"
+          && Redact.tilde("/private/tmp/claude-501/-Users-first-last--claude-x/s1", home: "/Users/first.last") == "/private/tmp/claude-501/~--claude-x/s1",
+          "the home folder reads as ~, also in Claude's dashed folder names, and only the home folder")
+    let shared = Redact.commandLine(["node", "/Users/me/app/server.js", "--port=3000", "--password", "hunter2", "--api-key=abc123", "postgres://u:pw@db.local/x",
+                                     "sk-ant-api03-AbCdEfGhIjKlMnOpQrStUvWx0123", "PGPASSWORD=xyz", "npm run dev --authToken=qq"], home: home)
     check(["hunter2", "abc123", "u:pw", "AbCdEf", "xyz", "qq"].allSatisfy { !shared.contains($0) } && shared.contains("node ~/app/server.js --port=3000")
           && shared.contains("postgres://…@db.local/x") && shared.contains("--api-key=…"), "a command line keeps its shape and loses its secrets: \(shared)")
+    // Secrets the first version let through (review, 2026-11-14): JSON, query strings, headers, values with spaces, odd names.
+    let leaky: [[String]] = [
+        ["node", "app.js", "--config", #"{"host":"db","apiKey":"abc","password":"hunter2"}"#, "--settings", #"{"env":{"GITHUB_TOKEN":"hunter2"}}"#],
+        ["psql", "postgresql://db.local/x?sslmode=require&password=hunter2", "https://h/cb?redirect=1&token=hunter2"],
+        ["curl", "-H", "X-Api-Key: hunter2", "-H", "Authorization: Basic dXNlcjpwYXNz", "-u", "user:hunter2"],
+        ["tool", "--password", "correct horse battery staple", "PASSWORD=correct horse", "--passphrase", "hunter2", "--pat", "hunter2", "--secret:hunter2"],
+        ["mysql", "-phunter2", "redis://user:p@ss@host", "mongodb://user:pa/ss@host", "PRIVATEKEY=hunter2", "AWS_SECRET_ACCESS_KEY=hunter2"],
+        ["npm run dev --token hunter2 -H Authorization: Bearer hunter2"],
+    ]
+    for args in leaky {
+        let line = Redact.commandLine(args, home: home)
+        check(!["hunter2", "horse", "abc", "dXNlcjpwYXNz", "pa/ss", "@ss"].contains { line.contains($0) }, "no secret gets through: \(line)")
+    }
+    check(Redact.commandLine(["node", "server.js", "--port", "3000", "--path", "/Users/me/site"], home: home) == "node server.js --port 3000 --path ~/site",
+          "ordinary flags and their values stay")
+    check(Rules.serverName(["npx", "-y", "@upstash/context7-mcp", "--api-key", "ctx7sk-abc"], fallback: "node") == "context7-mcp"
+          && Rules.command(["tool", "--token", "abc", "start"], fallback: "tool") == "start", "a secret flag's value is never part of a row's name")
     let expoRow = ids(Fixtures.expoOrphan).first { $0.id.hasPrefix("orphan:") }
     let one = expoRow.map { Ask.question([$0], sample: Fixtures.history(Fixtures.expoOrphan).last, home: home) } ?? ""
     check(one.hasPrefix(Copy.askOne) && one.contains("\n\(expoRow?.name ?? "-")\n") && one.contains(Copy.askSays(expoRow?.why ?? "-"))
@@ -915,6 +933,13 @@ func runSelfTest() {
     check(!all.contains("—") && !all.contains("!") && !all.contains("/Users/me"), "the question is plain words and never names the home folder")
     let lots = Ask.question(Array(repeating: everything, count: 4).flatMap { $0 }, sample: nil, home: home)
     check(lots.count <= Ask.limit && lots.contains(" more that didn't fit"), "rows past the limit are counted, not dropped quietly: \(lots.count)")
+    let wide = everything.map { f in
+        Finding(id: f.id, keepKey: f.keepKey, group: f.group, name: "東京の" + f.name, why: String(repeating: "日本語の説明 ", count: 9), bytes: f.bytes,
+                action: f.action, undoLabel: f.undoLabel, link: f.link, iconPath: f.iconPath, symbol: f.symbol)
+    }
+    let wideQuestion = Ask.question(wide, sample: nil, home: home)
+    check(Ask.url(wideQuestion, app: false).absoluteString.utf8.count <= Ask.linkLimit + 40 && wideQuestion.contains(" more that didn't fit"),
+          "text that grows when escaped still fits a link: \(Ask.url(wideQuestion, app: false).absoluteString.utf8.count) bytes")
     let buttons: [Finding.Action?] = [nil, .emptyTrash, .restart, .stopBackup, .deleteRuntime(id: "x"), .deleteDevice(udid: "y"), .endSessions([]), .trashAll([]),
                                       .sigtermAll([]), .trash(path: "/x"), .shutdownSim(udid: "u"), .deleteUnavailableSims]
     check(buttons.allSatisfy { let s = Copy.askButton($0); return !s.contains("—") && !s.contains("!") && s.hasSuffix(".") }, "every button is told in plain words")

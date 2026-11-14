@@ -31,8 +31,12 @@ if CommandLine.arguments.contains("--scan") {
     let thenUndo = args.contains("--then-undo")
     let confirmed = args.contains("--confirm")
     let explain = args.firstIndex(of: "--explain").flatMap { args.count > $0 + 1 ? pid_t(args[$0 + 1]) : nil }
-    let ask = args.firstIndex(of: "--ask").flatMap { args.count > $0 + 1 ? args[$0 + 1] : nil }
+    let ask = args.firstIndex(of: "--ask").flatMap { args.count > $0 + 1 && !args[$0 + 1].hasPrefix("-") ? args[$0 + 1] : nil }
     let openAsk = args.contains("--open")
+    if args.contains("--ask"), ask == nil {
+        print("--ask needs a row ID (as --scan prints it) or all")
+        exit(1)
+    }
     NSApplication.shared.setActivationPolicy(.accessory)
     Task { @MainActor in
         let engine = Engine()

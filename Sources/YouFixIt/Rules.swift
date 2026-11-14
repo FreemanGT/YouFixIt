@@ -177,11 +177,14 @@ enum Rules {
     }
 
     /// "npm exec next dev --port 3120" reads as "next dev", "php -S 127.0.0.1:8902 -t …" as "php -S :8902",
-    /// "npm run dev" as itself; anything else as `command` names it.
+    /// "npm run dev" as itself; anything else as `command` names it. The value of a secret flag (--api-key abc) is never
+    /// part of a name.
     static func serverName(_ args: [String]?, fallback: String) -> String {
         // A tool that renames itself (npm sets its title) leaves one argument holding the whole line, then empty ones.
         guard var words = args?.filter({ !$0.isEmpty }), !words.isEmpty else { return fallback }
         if words.count == 1, words[0].contains(" ") { words = words[0].split(separator: " ").map(String.init) }
+        words = Redact.withoutSecrets(words)
+        guard !words.isEmpty else { return fallback }
         if let i = words.firstIndex(of: "-S"), words.indices.contains(i + 1) {
             return "php -S :\(words[i + 1].split(separator: ":").last.map(String.init) ?? words[i + 1])"
         }
@@ -376,8 +379,9 @@ enum Rules {
     }
 
     /// "node …/.bin/expo start --port 8081" reads as "expo start"; "node --liftoff-only …/codegraph.js" as "codegraph.js".
+    /// The value of a secret flag (--token abc) is never taken for the name.
     static func command(_ args: [String]?, fallback: String) -> String {
-        guard let args = args?.filter({ !$0.isEmpty }) else { return fallback }
+        guard let args = args.map({ given in Redact.withoutSecrets(given.filter { !$0.isEmpty }) }) else { return fallback }
         let rest = args.dropFirst()
         // Code given inline (node -e, python3 -c) is not a name; nor is anything after it.
         let inline: Set<String> = ["-e", "-c", "--eval", "-p", "--print"]
