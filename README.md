@@ -2,6 +2,8 @@
 
 A small face in your menu bar that notices when your Mac is struggling and offers one safe button.
 
+**[getyoufixit.vercel.app](https://getyoufixit.vercel.app)** · free forever, a gift to the community. The site's source is in `site/` (built from `web/` with `node web/build.mjs`).
+
 It watches quietly. When something you are not using is weighing the Mac down, the pebble turns green and shows how many things it found; amber means the Mac is struggling right now. Open it, read the plain-words list, press **Tidy up**. Apps it closes can be reopened with **Undo** for a minute, and anything it clears from disk goes to the Trash first.
 
 **Tidy up** acts on: apps untouched for an hour with no window open and nothing going on inside them, Docker Desktop or OrbStack with no containers running, iPhone simulators nothing is using, dev servers in any language (Node, Bun, Deno, PHP, Python, Ruby) left behind by finished coding sessions with nobody connected (small ones share a row), idle Gradle and Kotlin build daemons, headless test browsers, Homebrew services nothing is connected to (stopped and taken off the login list; Undo puts them back), old npx downloads, Claude Code's scratch folders from sessions that ended days ago, Xcode build and preview caches, download caches of developer tools (npm, pnpm, Yarn, pip, Homebrew, CocoaPods, Gradle, Maven, Go, Cargo, Bun), caches left behind by removed apps, old installers in Downloads, and unusable simulators.
