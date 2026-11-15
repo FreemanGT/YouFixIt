@@ -747,7 +747,8 @@ enum Rules {
     /// sit quiet: never an app you rely on, the one in front, one with a dialog or one playing sound. `covered` holds the
     /// processes another row already reaches.
     static func memory(_ s: Sample, _ h: [Sample], keep: Set<String>, _ t: Tuning, covered: Set<pid_t>) -> Finding? {
-        let short = squeezed(s, h)
+        // Pressure right now counts too, so the row never calls memory normal in the first minute of a squeeze.
+        let short = squeezed(s, h) || s.pressure >= 2
         guard short || s.memUsed >= s.memTotal / 2 else { return nil }
         var quit: [Finding.AppTarget] = []
         if spans(h, t.idle) {
@@ -761,8 +762,8 @@ enum Rules {
             }
         }
         quit.sort { $0.bytes != $1.bytes ? $0.bytes > $1.bytes : $0.name < $1.name }
-        // Two names make room for the idle ones; the button's size says what quitting them frees.
-        let why = Copy.memory(used: s.memUsed, total: s.memTotal, short: short, holders: holders(s, top: quit.isEmpty ? 3 : 2), idle: quit.map(\.name))
+        // The row's size says what the button frees.
+        let why = Copy.memory(used: s.memUsed, total: s.memTotal, short: short, holders: holders(s), idle: quit.map(\.name))
         return Finding(id: "know:memory", keepKey: "know:memory", group: .know, name: "Memory", why: why, bytes: quit.reduce(0) { $0 + $1.bytes },
                        action: quit.isEmpty ? nil : .quitApps(quit), undoLabel: quit.isEmpty ? nil : Copy.reopen, link: activityMonitor,
                        iconPath: nil, symbol: "memorychip")

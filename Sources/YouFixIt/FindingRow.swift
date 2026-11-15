@@ -235,7 +235,9 @@ struct KnowRow: View {
     private var why: String {
         if confirming, let action = finding.action { return Copy.confirmNote(action) }
         switch outcome {
-        case .done: return engine.acted?.id == finding.id ? engine.acted?.text ?? finding.why : finding.why
+        case .done:
+            guard let acted = engine.acted, acted.id == finding.id else { return finding.why }
+            return acted.detail.map { "\(acted.text) \($0)" } ?? acted.text
         case .askedToSave: return Copy.askedToSave(finding.name)
         case .stillRunning: return Copy.stayedOpen(finding.name)
         case .refused(let reason), .failed(let reason): return reason

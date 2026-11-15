@@ -774,6 +774,25 @@ func runSelfTest() {
     check(Copy.verb(.quitApps([.init(pid: 1, bundleID: "a", url: nil, name: "Figma", bytes: 0)])) == "Quit Figma"
           && Copy.verb(.quitApps([.init(pid: 1, bundleID: "a", url: nil, name: "Figma", bytes: 0), .init(pid: 2, bundleID: "b", url: nil, name: "Notion", bytes: 0)])) == "Quit 2 idle apps",
           "the button names one app, counts several")
+    check(Copy.verb(.quitApps([.init(pid: 1, bundleID: "a", url: nil, name: "Adobe Photoshop 2025", bytes: 0)])) == "Quit 1 idle app",
+          "a long name is counted, so the button stays short")
+    check(row(ids(Fixtures.memoryNormal) { i, s in if i == 30 { s.pressure = 2 } }, "know:memory")?.why.contains("running short") == true,
+          "pressure right now is never called normal, even before it has held a minute")
+    let longNames = ids(Fixtures.memoryNormal) { _, s in
+        s.memUsed = 31_500 << 20
+        s.apps = s.apps.map { $0.pid == 5900 ? Fixtures.app(5900, "com.adobe.Photoshop", "Adobe Photoshop 2025", activatedAgo: 1500, windows: 2) : $0 }
+        s.apps = s.apps.map { $0.pid == 2646 ? Fixtures.app(2646, "com.microsoft.VSCode", "Visual Studio Code Insiders", activatedAgo: 120, windows: 2) : $0 }
+        s.apps = s.apps.map { $0.pid == 5950 ? Fixtures.app(5950, "com.microsoft.Excel", "Microsoft Excel", activatedAgo: 1500, windows: 1) : $0 }
+        for (pid, name) in [(5960, "Microsoft PowerPoint"), (5970, "Microsoft Word")] {
+            s.procs.append(Fixtures.proc(pid_t(pid), 1, name, path: "/Applications/\(name).app/Contents/MacOS/\(name)", ago: 9000, mb: 700))
+            s.apps.append(Fixtures.app(pid_t(pid), "com.microsoft.\(name.split(separator: " ").last!)", name, activatedAgo: 1500, windows: 1))
+        }
+    }
+    let longRow = row(longNames, "know:memory")
+    check((longRow?.why.count ?? 999) < 140 && quits(longRow).count == 4, "long app names still fit the line (\(longRow?.why.count ?? 0)): \(longRow?.why ?? "-")")
+    check(Copy.quitApps(["Figma"], freed: 900 << 20) == "Quit Figma, freed 900 MB." && Copy.quitApps(["A", "B", "C"], freed: 0) == "Quit 3 apps."
+          && Copy.heldApp("Notion", Copy.refusedInUse) == "Notion: You're using it right now, so it stays.",
+          "the done line names what quit, and what stayed is told by name")
 
     print("safety")
     let hist = Fixtures.history(Fixtures.simIdle)

@@ -47,6 +47,7 @@ final class Engine {
     struct Acted: Equatable {
         let id: String
         let text: String
+        var detail: String? = nil   // what held part of it back, said in the row, not on the one-line done line
         let undoable: Bool
         let token = UUID()
     }
@@ -90,6 +91,10 @@ final class Engine {
     private var undoRecords: [UndoRecord] = []
     private var actUndo: [UndoRecord] = []
     private var skipUntil: [String: Date] = [:]
+    /// Apps the Memory button quit and Undo reopened: bundle id → until when they are left out, as if kept.
+    private var spared: [String: Date] = [:]
+    /// The Always keep list, plus apps spared for now.
+    private var keepNow: Set<String> { Set(keep.keys).union(spared.filter { $0.value > Date() }.keys) }
     private var nudgedIDs: [String: Date] = [:]
     /// What YouFixIt itself put in the Trash: its path in the Trash → [bytes, when]. Measuring ~/.Trash needs Full Disk
     /// Access, so this is how the Trash row knows there is space waiting there.
@@ -238,7 +243,7 @@ final class Engine {
 
     private func recompute() {
         let now = Date()
-        let all = Rules.findings(history: history, disk: disk, keep: Set(keep.keys), tuning: tuning, trashed: trashed)
+        let all = Rules.findings(history: history, disk: disk, keep: keepNow, tuning: tuning, trashed: trashed)
             .filter { skipUntil[$0.id].map { $0 < now } ?? true }
         let known = Set(findings.map(\.id))
         for f in all where f.actionable && !known.contains(f.id) { selected.insert(f.id) }
@@ -292,7 +297,7 @@ final class Engine {
                 try? await Task.sleep(for: .milliseconds(700))
                 r = ActResult(outcome: .done, freed: f.bytes)
             } else {
-                r = await Actions.perform(f, history: history, keep: Set(keep.keys), tuning: tuning)
+                r = await Actions.perform(f, history: history, keep: keepNow, tuning: tuning)
                 undoRecords += r.undo
             }
             record(r, of: f)
@@ -373,14 +378,15 @@ final class Engine {
             try? await Task.sleep(for: .milliseconds(700))
             r = ActResult(outcome: .done, freed: f.bytes)
         } else {
-            r = await Actions.perform(f, history: history, keep: Set(keep.keys), tuning: tuning, explicit: true)
+            r = await Actions.perform(f, history: history, keep: keepNow, tuning: tuning, explicit: true)
         }
         record(r, of: f)
         acting = nil
         knowOutcome[f.id] = r.outcome
         if r.outcome == .done {
             actUndo = r.undo
-            let line = Acted(id: f.id, text: Copy.acted(action, name: f.name, freed: r.freed), undoable: !r.undo.isEmpty || (mock && f.undoLabel != nil))
+            let line = Acted(id: f.id, text: r.summary ?? Copy.acted(action, name: f.name, freed: r.freed), detail: r.detail,
+                             undoable: !r.undo.isEmpty || (mock && f.undoLabel != nil))
             acted = line
             Sound.play(.done)
             Task { [weak self] in
@@ -410,7 +416,13 @@ final class Engine {
         actUndo = []
         acted = nil
         knowOutcome[line.id] = nil
-        skipUntil[line.id] = Date().addingTimeInterval(86_400)
+        let until = Date().addingTimeInterval(86_400)
+        if line.id == "know:memory" {
+            // Memory sums up the Mac, so it stays; the apps it reopens are left out of its button for a day.
+            for case .reopen(let url) in records { if let id = Bundle(url: url)?.bundleIdentifier { spared[id] = until } }
+        } else {
+            skipUntil[line.id] = until
+        }
         var any = false
         for r in records {
             if await Actions.undo(r) {

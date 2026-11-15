@@ -15,6 +15,10 @@ struct ActResult: Sendable {
     var outcome: Outcome
     var undo: [UndoRecord] = []
     var freed: UInt64 = 0
+    /// The done line, when the action's own words say it better than the row's name can ("Quit Figma, freed 900 MB.").
+    var summary: String? = nil
+    /// What held part of it back, shown in the row under the done line ("Notion asked to save first, so it stayed open.").
+    var detail: String? = nil
 }
 
 /// The only code that changes anything on the Mac. Every path re-checks safety first and never escalates.
@@ -28,26 +32,40 @@ enum Actions {
             let (o, undo) = await quit(pid: pid, bundleID: bundleID, url: url, name: f.name, history: history, keep: keep, tuning: tuning, strict: !explicit)
             return ActResult(outcome: o, undo: undo.map { [$0] } ?? [], freed: o == .done ? f.bytes : 0)
         case .quitApps(let apps):
+            // The row is "Memory", so each app that quit, and each one held back, is told by its own name.
             var result = ActResult(outcome: .done)
-            var outcomes: [Outcome] = []
+            var quitNames: [String] = []
+            var held: [String] = []
             for a in apps {
+                let name = Copy.appName(a.name)
+                // Closed since the row was made: nothing was done to it, so nothing is freed and Undo has nothing to reopen.
+                guard let running = NSRunningApplication(processIdentifier: a.pid), running.bundleIdentifier == a.bundleID,
+                      !running.isTerminated else { continue }
                 // Someone may have gone back to it since the row was made.
                 if let last = history.last?.app(a.pid)?.lastActivated, Date().timeIntervalSince(last) < tuning.idle {
-                    outcomes.append(.refused(Copy.refusedInUse))
+                    held.append(Copy.heldApp(name, Copy.refusedInUse))
                     continue
                 }
-                let (o, undo) = await quit(pid: a.pid, bundleID: a.bundleID, url: a.url, name: a.name, history: history, keep: keep, tuning: tuning,
+                let (o, undo) = await quit(pid: a.pid, bundleID: a.bundleID, url: a.url, name: name, history: history, keep: keep, tuning: tuning,
                                            strict: !explicit)
-                // The row is "Memory", so what held an app back is told in that app's name.
                 switch o {
-                case .askedToSave: outcomes.append(.refused(Copy.askedToSave(Copy.appName(a.name))))
-                case .stillRunning: outcomes.append(.refused(Copy.stayedOpen(Copy.appName(a.name))))
-                default: outcomes.append(o)
+                case .done:
+                    quitNames.append(name)
+                    result.freed += a.bytes
+                    if let undo { result.undo.append(undo) }
+                case .askedToSave: held.append(Copy.askedToSave(name))
+                case .stillRunning: held.append(Copy.stayedOpen(name))
+                case .refused(let why): held.append(Copy.heldApp(name, why))
+                case .failed(let why): held.append(why)
                 }
-                if o == .done { result.freed += a.bytes }
-                if let undo { result.undo.append(undo) }
             }
-            result.outcome = merge(outcomes)
+            let reasons = held.prefix(2).joined(separator: " ")
+            if quitNames.isEmpty, !held.isEmpty {
+                result.outcome = .refused(reasons)
+            } else {
+                result.summary = quitNames.isEmpty ? Copy.appsGone : Copy.quitApps(quitNames, freed: result.freed)
+                result.detail = held.isEmpty ? nil : reasons
+            }
             return result
         case .shutdownSim(let udid):
             let gui = NSWorkspace.shared.runningApplications.contains { Rules.simGUIBundles.contains($0.bundleIdentifier ?? "") && !$0.isHidden }

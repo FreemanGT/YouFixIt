@@ -117,7 +117,8 @@ enum Copy {
     static func verb(_ action: Finding.Action) -> String {
         switch action {
         case .quitApp: "Quit"
-        case .quitApps(let apps): apps.count == 1 ? "Quit \(appName(apps[0].name))" : "Quit \(apps.count) idle apps"
+        case .quitApps(let apps):
+            apps.count == 1 && appName(apps[0].name).count <= 13 ? "Quit \(appName(apps[0].name))" : apps.count == 1 ? "Quit 1 idle app" : "Quit \(apps.count) idle apps"
         case .shutdownSim: "Shut down"
         case .sigterm, .sigtermAll, .stopService: "Stop"
         case .endSessions: "Close quiet ones"
@@ -141,7 +142,7 @@ enum Copy {
         let tail = freed > 0 ? ", freed \(Format.size(freed))." : "."
         switch action {
         case .quitApp: return "Quit \(name)\(tail)"
-        case .quitApps(let apps): return apps.count == 1 ? "Quit \(appName(apps[0].name))\(tail)" : "Quit the idle apps\(tail)"
+        case .quitApps(let apps): return quitApps(apps.map { appName($0.name) }, freed: freed)
         case .shutdownSim, .sigterm, .sigtermAll, .stopService: return "Stopped \(name)\(tail)"
         case .endSessions: return "Closed the quiet sessions\(tail)"
         case .trash, .trashAll: return "Moved \(name) to the Trash."
@@ -204,20 +205,30 @@ enum Copy {
     static let serviceBusy = "Running from Homebrew, and busy right now."
     /// "31 GB of 48 GB in use, which is normal: your Mac isn't short of memory. Biggest: Chrome Beta 5.8 GB, Aside 5 GB, Claude 4.6 GB."
     /// `idle` names the apps the row's button quits.
+    /// Fits the line under 140 characters: fewer biggest apps first, then the idle ones as a count.
     static func memory(used: UInt64, total: UInt64, short: Bool, holders: [(name: String, bytes: UInt64)], idle: [String]) -> String {
-        var text = short
+        let head = short
             ? "\(Format.size(used)) of \(Format.size(total)) in use. Memory is running short, so your Mac is juggling."
             : "\(Format.size(used)) of \(Format.size(total)) in use, which is normal: your Mac isn't short of memory."
-        if !holders.isEmpty {
-            // A size never breaks across lines ("8.4" here, "GB" on the next).
-            text += " Biggest: " + holders.map { "\(appName($0.name)) \(Format.size($0.bytes).replacingOccurrences(of: " ", with: "\u{00A0}"))" }
+        // A size never breaks across lines ("8.4" here, "GB" on the next).
+        func biggest(_ n: Int) -> String {
+            n == 0 ? "" : " Biggest: " + holders.prefix(n).map { "\(appName($0.name)) \(Format.size($0.bytes).replacingOccurrences(of: " ", with: "\u{00A0}"))" }
                 .joined(separator: ", ") + "."
         }
-        if !idle.isEmpty {
-            text += " Idle: \(list(idle.count > 3 ? idle.prefix(2).map(appName) + ["\(idle.count - 2) more"] : idle.map(appName)))."
-        }
-        return text
+        let names = idle.isEmpty ? "" : " Idle: \(list(idle.count > 3 ? idle.prefix(2).map(appName) + ["\(idle.count - 2) more"] : idle.map(appName)))."
+        let count = idle.isEmpty ? "" : idle.count == 1 ? " One app sits idle." : " \(idle.count) apps sit idle."
+        let most = min(holders.count, idle.isEmpty ? 3 : 2)
+        let tries = (0...most).reversed().map { biggest($0) + names } + (0...most).reversed().map { biggest($0) + count }
+        return head + (tries.first { head.count + $0.count < 140 } ?? count)
     }
+    /// What the Memory button did: "Quit Figma, freed 900 MB.", "Quit 4 apps, freed 2 GB."
+    static func quitApps(_ names: [String], freed: UInt64) -> String {
+        let tail = freed > 0 ? ", freed \(Format.size(freed))." : "."
+        return "Quit \(names.count <= 2 ? list(names) : "\(names.count) apps")\(tail)"
+    }
+    static let appsGone = "Those apps were already closed."
+    /// One app the Memory button left open, and why: "Notion: You're using it right now, so it stays."
+    static func heldApp(_ name: String, _ why: String) -> String { "\(name): \(why)" }
     /// An app as a sentence names it: without the brand word, and without the invisible marks some names carry (WhatsApp's).
     static func appName(_ name: String) -> String {
         let shown = String(String.UnicodeScalarView(name.unicodeScalars.filter { $0.properties.generalCategory != .format }))
