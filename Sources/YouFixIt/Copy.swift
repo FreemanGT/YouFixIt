@@ -227,6 +227,7 @@ enum Copy {
         return "Quit \(names.count <= 2 ? list(names) : "\(names.count) apps")\(tail)"
     }
     static let appsGone = "Those apps were already closed."
+    static func moreStayed(_ n: Int) -> String { n == 1 ? "1 more stayed open." : "\(n) more stayed open." }
     /// One app the Memory button left open, and why: "Notion: You're using it right now, so it stays."
     static func heldApp(_ name: String, _ why: String) -> String { "\(name): \(why)" }
     /// An app as a sentence names it: without the brand word, and without the invisible marks some names carry (WhatsApp's).

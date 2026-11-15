@@ -59,7 +59,7 @@ enum Actions {
                 case .failed(let why): held.append(why)
                 }
             }
-            let reasons = held.prefix(2).joined(separator: " ")
+            let reasons = (held.prefix(2) + (held.count > 2 ? [Copy.moreStayed(held.count - 2)] : [])).joined(separator: " ")
             if quitNames.isEmpty, !held.isEmpty {
                 result.outcome = .refused(reasons)
             } else {

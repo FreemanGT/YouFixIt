@@ -93,8 +93,8 @@ final class Engine {
     private var skipUntil: [String: Date] = [:]
     /// Apps the Memory button quit and Undo reopened: bundle id → until when they are left out, as if kept.
     private var spared: [String: Date] = [:]
-    /// The Always keep list, plus apps spared for now.
-    private var keepNow: Set<String> { Set(keep.keys).union(spared.filter { $0.value > Date() }.keys) }
+    /// Apps spared right now.
+    private var sparedNow: Set<String> { Set(spared.filter { $0.value > Date() }.keys) }
     private var nudgedIDs: [String: Date] = [:]
     /// What YouFixIt itself put in the Trash: its path in the Trash → [bytes, when]. Measuring ~/.Trash needs Full Disk
     /// Access, so this is how the Trash row knows there is space waiting there.
@@ -243,7 +243,7 @@ final class Engine {
 
     private func recompute() {
         let now = Date()
-        let all = Rules.findings(history: history, disk: disk, keep: keepNow, tuning: tuning, trashed: trashed)
+        let all = Rules.findings(history: history, disk: disk, keep: Set(keep.keys), tuning: tuning, trashed: trashed, spared: sparedNow)
             .filter { skipUntil[$0.id].map { $0 < now } ?? true }
         let known = Set(findings.map(\.id))
         for f in all where f.actionable && !known.contains(f.id) { selected.insert(f.id) }
@@ -297,7 +297,7 @@ final class Engine {
                 try? await Task.sleep(for: .milliseconds(700))
                 r = ActResult(outcome: .done, freed: f.bytes)
             } else {
-                r = await Actions.perform(f, history: history, keep: keepNow, tuning: tuning)
+                r = await Actions.perform(f, history: history, keep: Set(keep.keys), tuning: tuning)
                 undoRecords += r.undo
             }
             record(r, of: f)
@@ -378,7 +378,9 @@ final class Engine {
             try? await Task.sleep(for: .milliseconds(700))
             r = ActResult(outcome: .done, freed: f.bytes)
         } else {
-            r = await Actions.perform(f, history: history, keep: keepNow, tuning: tuning, explicit: true)
+            // Apps spared after an Undo stay out of the Memory button, and only that one, when it is pressed too.
+            let keepSet = f.id == "know:memory" ? Set(keep.keys).union(sparedNow) : Set(keep.keys)
+            r = await Actions.perform(f, history: history, keep: keepSet, tuning: tuning, explicit: true)
         }
         record(r, of: f)
         acting = nil

@@ -793,6 +793,10 @@ func runSelfTest() {
     check(Copy.quitApps(["Figma"], freed: 900 << 20) == "Quit Figma, freed 900 MB." && Copy.quitApps(["A", "B", "C"], freed: 0) == "Quit 3 apps."
           && Copy.heldApp("Notion", Copy.refusedInUse) == "Notion: You're using it right now, so it stays.",
           "the done line names what quit, and what stayed is told by name")
+    let spared = Rules.findings(history: Fixtures.history(Fixtures.memoryNormal), disk: nil, keep: [], tuning: t, spared: ["com.figma.Desktop"])
+    let sparedIdle = Rules.findings(history: Fixtures.history(Fixtures.freeflowIdle), disk: nil, keep: [], tuning: t, spared: ["com.freemans.freeflow"])
+    check(quits(row(spared, "know:memory")).isEmpty && row(spared, "know:memory") != nil && acts(sparedIdle) == ["app:com.freemans.freeflow"],
+          "an app reopened by Undo stays out of the Memory button only; the row stays, and other rows still see the app")
 
     print("safety")
     let hist = Fixtures.history(Fixtures.simIdle)

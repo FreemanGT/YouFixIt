@@ -44,8 +44,10 @@ enum Rules {
         return String(label.dropFirst(prefix.count))
     }
 
-    /// `trashed` is what YouFixIt itself moved to the Trash lately, for when the Trash cannot be measured directly.
-    static func findings(history: [Sample], disk: DiskScan?, keep: Set<String>, tuning: Tuning, trashed: UInt64 = 0) -> [Finding] {
+    /// `trashed` is what YouFixIt itself moved to the Trash lately, for when the Trash cannot be measured directly. `spared`
+    /// holds apps the Memory button quit and Undo reopened: left out of that button only, every other row still sees them.
+    static func findings(history: [Sample], disk: DiskScan?, keep: Set<String>, tuning: Tuning, trashed: UInt64 = 0,
+                         spared: Set<String> = []) -> [Finding] {
         guard let s = history.last else { return [] }
         var out: [Finding] = []
         out += idleSimulators(s, history, tuning)
@@ -60,7 +62,7 @@ enum Rules {
         out += trashLedger(disk, trashed: trashed)
         // A process with a row already is not explained a second time.
         out += insights(s, history, tuning, covered: covered(out))
-        if let m = memory(s, history, keep: keep, tuning, covered: covered(out)) { out.append(m) }
+        if let m = memory(s, history, keep: keep.union(spared), tuning, covered: covered(out)) { out.append(m) }
         let kept = out.filter { !keep.contains($0.keepKey) }
         // Good to know reads biggest first, after Memory, which sums up the rest. 100 MB buckets keep rows from swapping
         // places as memory wobbles between samples.
