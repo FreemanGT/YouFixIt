@@ -1,0 +1,26 @@
+<section id="finds" class="s s--paper finds" aria-labelledby="finds-title">
+  <div class="wrap grid-12 finds__grid">
+    <div class="finds__head">
+      <h2 id="finds-title" class="t-h2 finds__title">It looks for the things you started and forgot.</h2>
+      <p class="t-lead finds__lead"><span class="finds__face"><!-- @pebble calm class="yf-pb--inline" --> Grey</span> when it’s fine, <span class="finds__face"><!-- @pebble light count=3 class="yf-pb--inline" --> green</span> with a number when something’s idling, <span class="finds__face"><!-- @pebble heavy count=5 class="yf-pb--inline" --> amber</span> when your Mac is struggling.</p>
+    </div>
+    <p class="t-sentence finds__s finds__s--run">Running now: <span class="nw"><button type="button" class="chip" aria-controls="finds-card" aria-pressed="false" data-k="apps"><span class="chip__well" aria-hidden="true"></span>idle apps</button>,</span> <span class="nw"><button type="button" class="chip" aria-controls="finds-card" aria-pressed="true" data-k="docker"><span class="chip__well" aria-hidden="true"></span>Docker with nothing running</button>,</span> <span class="nw"><button type="button" class="chip" aria-controls="finds-card" aria-pressed="false" data-k="sims"><span class="chip__well" aria-hidden="true"></span>iPhone simulators</button>,</span> <span class="nw"><button type="button" class="chip" aria-controls="finds-card" aria-pressed="false" data-k="servers"><span class="chip__well" aria-hidden="true"></span>leftover dev servers</button>.</span></p>
+    <div class="finds__dock">
+      <figure class="finds__sticky" aria-labelledby="finds-cap">
+        <div class="finds__tray yf-p" id="finds-card" aria-live="polite">
+          <div class="finds__swap">
+            <p class="finds__group" data-group>Running now</p>
+            <!-- @row glyph=cube name="Docker" why="No containers running, nothing using it" mib=3788.8 -->
+          </div>
+        </div>
+        <figcaption class="t-small finds__cap" id="finds-cap">Example row, in the app’s own words. Press any underlined phrase to see its row.</figcaption>
+      </figure>
+    </div>
+    <p class="t-sentence finds__s finds__s--space">Taking up space: <span class="nw"><button type="button" class="chip" aria-controls="finds-card" aria-pressed="false" data-k="xcode"><span class="chip__well" aria-hidden="true"></span>Xcode caches</button>,</span> <span class="nw"><button type="button" class="chip" aria-controls="finds-card" aria-pressed="false" data-k="caches"><span class="chip__well" aria-hidden="true"></span>tool caches</button>,</span> <span class="nw"><button type="button" class="chip" aria-controls="finds-card" aria-pressed="false" data-k="installers"><span class="chip__well" aria-hidden="true"></span>old installers</button>.</span></p>
+    <p class="t-body finds__also">Also idle build daemons, Homebrew services nobody is connected to, and Claude Code scratch folders.</p>
+    <div class="finds__notes">
+      <p class="t-body finds__know">The rest goes under Good to know: Spotlight indexing, software updates, browsers with many tabs, open Claude coding sessions, virtual machines. It explains them and leaves the choice to you.</p>
+      <p class="t-body finds__ask">Every row has a sparkle. Ask Claude opens a new chat with the question already written. Claude gets the words; nothing on your Mac changes.</p>
+    </div>
+  </div>
+</section>

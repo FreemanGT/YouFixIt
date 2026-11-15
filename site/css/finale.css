@@ -1,0 +1,100 @@
+/* finale · "Where do I get it, and what's the catch?" (owner: finale builder, SPEC §finale)
+   Centred on paper-2. The giant "Free forever" ends on the pebble as its full stop; it remembers the example. */
+
+#finale { overflow: clip; padding-block: 7.5rem 2.5rem; }
+/* Untouched it stays on the FAQ's calm paper-2 (no alarm colour on the gift); mint once the example is tidied. */
+#finale { background: var(--paper-2); transition: background-color var(--d-haze) var(--ease-arrive); }
+#finale[data-state="done"] { background: var(--finale-done); }
+#finale .gate__capsule { background: color-mix(in srgb, var(--paper) 70%, #fff); }
+@media (prefers-color-scheme: dark) { #finale .gate__capsule { background: var(--paper); } }
+#finale .finale__in { display: flex; flex-direction: column; align-items: center; text-align: center; }
+
+/* The giant line. One line on desktop, "Free" / "forever." at phone width. The pebble never orphans. */
+#finale .finale__giant {
+  position: relative; isolation: isolate; /* the glow paints under the letters, not over them */
+  margin: 0; color: var(--ink); max-width: 100%;
+  font-size: var(--t-giant);
+  text-wrap: nowrap; white-space: nowrap;
+}
+#finale .finale__w { display: inline-block; white-space: nowrap; }
+
+/* The full stop: a bar pebble whose body is 0.4em wide, like a period. Its bottom sits on the baseline,
+   kerned tight to the r. The 22-unit canvas holds an 18-unit body (x 2..20) whose bottom is at y 17.5,
+   so the svg is .489em, drops 4.5/22 of itself below the baseline and starts 2/22 of itself left of the body. */
+#finale .finale__stop {
+  --stop: .489em;
+  position: relative; display: inline-block; vertical-align: baseline;
+  width: var(--stop); height: var(--stop);
+  margin-left: -.035em; margin-bottom: calc(var(--stop) * -4.5 / 22);
+}
+#finale .finale__period { position: absolute; inset: 0; display: block; --pb-size: var(--stop); }
+#finale .finale__period .yf-pebble--bar { display: block; margin: 0; width: 100%; height: 100%; }
+/* Light mode: #259E80 is 2.7:1 on paper-2 and mint; one step deeper holds 3.8:1 (non-text AA). Dark keeps 5.2:1. */
+@media not (prefers-color-scheme: dark) { #finale .finale__period { --face-green: #1A8269; } }
+
+/* The face's light: small, local, behind the period only (SPEC §I.2, §finale). */
+#finale .finale__glow {
+  position: absolute; z-index: -1; left: 50%; top: 45%; width: 1.1em; height: 1.1em;
+  transform: translate(-50%, -50%); pointer-events: none; contain: strict;
+}
+#finale .finale__glow-l {
+  position: absolute; inset: 0; border-radius: 50%; opacity: 0;
+  transition: opacity var(--d-haze) var(--ease-arrive);
+}
+#finale .finale__glow-l--green { background: radial-gradient(closest-side, color-mix(in srgb, var(--face-green) 16%, transparent), transparent); }
+#finale[data-mood="light"] .finale__glow-l--green { opacity: .6; }
+#finale[data-mood="done"] .finale__glow-l--green { opacity: 1; }
+
+/* The caption only after a tidy. Its line is always reserved, so nothing below it moves. */
+#finale .finale__caption {
+  margin: 1.25rem 0 0; color: var(--ink-2); min-height: calc(var(--t-small) * var(--t-small-lh));
+  visibility: hidden; opacity: 0;
+  transition: opacity var(--d-state) var(--ease-arrive), visibility 0s linear var(--d-state);
+}
+#finale[data-state="done"] .finale__caption {
+  visibility: visible; opacity: 1;
+  transition: opacity var(--d-state) var(--ease-arrive), visibility 0s;
+}
+
+#finale .finale__lead { margin: 1.5rem 0 0; max-width: 34em; color: var(--ink); text-wrap: balance; }
+
+/* The gate is centred as a block, and its label, error and note centre with the column around it. */
+#finale .finale__gate { display: flex; justify-content: center; width: 100%; margin-top: 2.5rem; text-align: center; }
+#finale .finale__gate .gate__error { justify-content: center; }
+#finale .finale__gate .gate__note { margin-inline: auto; text-wrap: balance; }
+
+/* Star it on GitHub: tonal, 48 px. The star fills with --go on hover. */
+#finale .finale__star { min-height: 48px; margin-top: 1.75rem; gap: .5em; }
+#finale .finale__star .star__glyph { width: 1.125em; height: 1.125em; }
+#finale .finale__star .star__fill { transition-duration: 120ms; }
+#finale .finale__star:hover .star__fill,
+#finale .finale__star:focus-visible .star__fill { fill: var(--go); }
+
+/* Requirements: one quiet line that wraps only on its dots. */
+#finale .finale__req {
+  display: flex; flex-wrap: wrap; justify-content: center; column-gap: .55em; row-gap: .1em;
+  margin: 1.5rem 0 0; color: var(--ink-2);
+}
+#finale .finale__req > span { white-space: nowrap; }
+
+@media (max-width: 720px) {
+  #finale { padding-block: 5rem 1.5rem; }
+  #finale .finale__w { display: block; }
+  #finale .finale__caption { margin-top: 1rem; max-width: 22em; }
+  #finale .finale__lead { margin-top: 1.25rem; text-wrap: pretty; }
+  #finale .finale__gate { margin-top: 2rem; }
+  #finale .finale__gate .gate { max-width: none; }
+  #finale .finale__star { width: 100%; min-height: 52px; margin-top: 12px; }
+  /* Two lines, broken on the second dot; never a dot left hanging at a line's end. */
+  #finale .finale__req .finale__dot--2 { display: none; }
+  #finale .finale__req > span:last-child { flex-basis: 100%; }
+}
+@media (max-width: 420px) {
+  #finale .finale__req { flex-direction: column; align-items: center; }
+  #finale .finale__req .finale__dot { display: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #finale .finale__glow-l { transition-duration: var(--d-state); }
+  #finale .finale__star:hover { transform: none; }
+}

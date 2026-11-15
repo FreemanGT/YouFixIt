@@ -1,0 +1,155 @@
+/* YouFixIt tokens (architect). SPEC §D. Light and dark follow the OS; no toggle.
+   Display face is Anybody, not Bricolage: Bricolage was Notched's display face (SPEC §D.1, profile Q29). */
+
+@font-face {
+  font-family: "Anybody Variable";
+  src: url("/fonts/anybody.woff2?v=3cd66c21") format("woff2");
+  font-weight: 500 800; font-stretch: 75% 112%; font-style: normal; font-display: swap;
+  unicode-range: U+0020-007E, U+00A0-00FF, U+2013, U+2018-201D, U+2026, U+00B7, U+2192, U+2122;
+}
+@font-face {
+  font-family: "Mona Sans Variable";
+  src: url("/fonts/mona-sans.woff2?v=63aaebbe") format("woff2");
+  font-weight: 400 650; font-stretch: 100% 112%; font-style: normal; font-display: swap;
+  unicode-range: U+0020-007E, U+00A0-00FF, U+2013, U+2018-201D, U+2026, U+00B7, U+2192, U+2122;
+}
+/* Metric-matched fallbacks on Arial (measured on the hero line: web/FOUNDATION.md) so the swap doesn't move the H1. */
+@font-face { font-family: "Anybody Fallback"; src: local("Arial"), local("ArialMT"); size-adjust: 110.1%; ascent-override: 72.2%; descent-override: 21.8%; line-gap-override: 0%; }
+@font-face { font-family: "Mona Fallback"; src: local("Arial"), local("ArialMT"); size-adjust: 104.5%; ascent-override: 104.3%; descent-override: 30.6%; line-gap-override: 0%; }
+
+:root {
+  color-scheme: light dark;
+
+  /* Faces */
+  --f-display: "Anybody Variable", "Anybody Fallback", system-ui, sans-serif;
+  --f-text: "Mona Sans Variable", "Mona Fallback", system-ui, sans-serif;
+  --f-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace; /* the visitor is on a Mac: SF Mono, no download */
+  --f-app-round: ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Mona Sans Variable", sans-serif;
+  --f-app: system-ui, -apple-system, "Mona Sans Variable", sans-serif;
+
+  /* Type scale (desktop; 390 values below). Anybody has no opsz axis: wdth + wght carry the roles. */
+  --t-hero: clamp(2.75rem, 1.2rem + 3.4vw, 4.25rem); --t-hero-lh: 1.02; --t-hero-ls: -0.025em; --t-hero-wght: 640; --t-hero-wdth: 92%;
+  --t-h2: 3rem;         --t-h2-lh: 1.05;   --t-h2-ls: -0.02em;    --t-h2-wght: 600;   --t-h2-wdth: 96%;
+  --t-giant: min(14vw, 12.5rem); /* "Free forever" plus its pebble full stop fits the 1200 column */ --t-giant-lh: 0.9; --t-giant-ls: -0.03em; --t-giant-wght: 760; --t-giant-wdth: 75%;
+  --t-sentence: 1.75rem; --t-sentence-lh: 1.5; --t-sentence-wght: 500;
+  --t-lead: 1.25rem;    --t-lead-lh: 1.45;
+  --t-body: 1.0625rem;  --t-body-lh: 1.55;
+  --t-small: 0.875rem;  --t-small-lh: 1.4;
+  --t-btn: 1rem;
+  --t-data: 0.9375rem;
+  --t-mark: 1.0625rem; --t-mark-pebble: 20px; /* the menu bar wordmark and its pebble */
+
+  /* Colour: one material (bone paper); the product's green and amber are the only colour (SPEC §D.2). */
+  --paper: #F2F3F1;
+  --paper-2: #E8E9E6;
+  --ink: #191B1A;
+  --ink-2: #565C59;
+  --line: #DEDDD6;
+  --go: #177D66;
+  --go-hover: #136B57;
+  --go-text: #136B57;
+  --go-tonal: #DFE9E4;
+  --go-tonal-hover: #D3E2DB;
+  --on-go: #FFFFFF;
+  --face-green: #259E80;
+  --face-amber: #EDA833;
+  --face-calm: var(--ink);
+  --face-paused: #8A8F8C;
+  --face-ring: #A8721A;
+  --haze-amber: rgba(237, 168, 51, 0.08);
+  --haze-green: rgba(37, 158, 128, 0.08);
+  --bar: rgba(242, 243, 241, 0.72);
+  /* The example's mood carried down the page: a soft light behind finds and never, and the finale's one
+     full-bleed colour (warm before the tidy, mint after). */
+  --mood-amber: rgba(237, 168, 51, 0.16);
+  --mood-green: rgba(37, 158, 128, 0.15);
+  --finale-heavy: #F4ECDD;
+  --finale-done: #D5ECE1;
+  --focus: var(--go);
+
+  /* Panel replica (Theme.swift; the panel never borrows site colours) */
+  --p-window: #ECECEC;
+  --p-card: rgba(0, 0, 0, 0.055);
+  --p-card-hover: rgba(0, 0, 0, 0.09);
+  --p-pill: rgba(0, 0, 0, 0.08);
+  --p-text: #1D1D1F;
+  --p-text-2: #5E5E62;
+  --p-tint: #177D66;
+  --p-tint-text: #136B57;
+  --p-tonal: rgba(23, 125, 102, 0.14);
+  --p-amber: #D99A2B;
+  --p-key: rgba(255, 255, 255, 0.22);
+  --p-shadow: 0 0 0 .5px rgba(0, 0, 0, .18), 0 18px 50px -12px rgba(0, 0, 0, .28);
+
+  /* Radii, space, sizes (4 px grid) */
+  --r-card: 14px; --r-panel: 12px; --r-chip: 10px; --r-pill: 999px; --r-key: 5px;
+  --col: 1200px;
+  --gutter: 24px;
+  --section-pad: clamp(3.75rem, 4.4vw, 4rem); /* ~120 px between screens; the paper-2 seam joins them */
+  --bar-h: 34px; /* a Mac menu bar (the taller notched-display bar) */
+  --pebble-size: 26px; /* the 18 x 15 pt pebble on its 22 pt canvas, a touch over true scale so it reads */
+  --hit: 30px;
+
+  /* Easing and durations (Theme.swift; nothing else) */
+  --ease-arrive: cubic-bezier(.16, 1, .3, 1);
+  --ease-leave: cubic-bezier(.42, 0, 1, 1);
+  --d-feedback: 120ms; --d-state: 220ms; --d-overlay: 360ms; --d-exit: 160ms; --d-count: 600ms;
+  --d-stagger: 80ms; --d-blink: 90ms; --d-smile: 1200ms; --d-haze: 600ms; --d-hover: 150ms;
+  /* --spring-perk / --spring-hop (CSS linear()) and their -dur are set by js/lib/motion.js; fallbacks: */
+  --spring-perk: var(--ease-arrive); --spring-perk-dur: 450ms;
+  --spring-hop: var(--ease-arrive);  --spring-hop-dur: 500ms;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --paper: #111312;
+    --paper-2: #181B19;
+    --ink: #ECEDE8;
+    --ink-2: #9CA29E;
+    --line: #2E3330;
+    --go: #19846B;
+    --go-hover: #157460;
+    --go-text: #66CCAB;
+    --go-tonal: #1F2E28;
+    --go-tonal-hover: #263A32;
+    --haze-green: rgba(37, 158, 128, 0.10);
+    --bar: rgba(17, 19, 18, 0.66);
+    --mood-amber: rgba(240, 180, 69, 0.11);
+    --mood-green: rgba(37, 158, 128, 0.16);
+    --finale-heavy: #1E1B15;
+    --finale-done: #10241D;
+
+    --p-window: #2A2A2C;
+    --p-card: rgba(255, 255, 255, 0.085);
+    --p-card-hover: rgba(255, 255, 255, 0.13);
+    --p-pill: rgba(255, 255, 255, 0.10);
+    --p-text: #F5F5F7;
+    --p-text-2: #ADADB2;
+    --p-tint: #19846B;
+    --p-tint-text: #66CCAB;
+    --p-tonal: rgba(25, 132, 107, 0.22);
+    --p-amber: #F0B445;
+    --p-shadow: 0 0 0 .5px rgba(255, 255, 255, .12), 0 18px 50px -12px rgba(0, 0, 0, .6);
+  }
+}
+
+/* Short desktops (1280 x 720) and narrow desktops / tablets: the hero line steps down so the panel fits. */
+@media (min-width: 721px) and (max-height: 820px) { :root { --t-hero: clamp(2.5rem, 0.8rem + 3vw, 3.5rem); } }
+@media (min-width: 721px) and (max-width: 1080px) { :root { --t-hero: clamp(2.25rem, 0.6rem + 3.2vw, 2.75rem); } }
+
+@media (max-width: 720px) {
+  :root {
+    --t-hero: 1.75rem; --t-hero-lh: 1.12;
+    --t-giant: clamp(4rem, 19vw, 17rem);
+    --t-mark: 1.125rem; --t-mark-pebble: 22px;
+    --pebble-size: 26px;
+    --t-h2: 2rem;
+    --t-sentence: 1.375rem;
+    --t-lead: 1.125rem;
+    --t-body: 1rem;
+    --gutter: 16px;
+    --section-pad: 3.5rem;
+    --bar-h: 48px;
+    --hit: 44px;
+  }
+}

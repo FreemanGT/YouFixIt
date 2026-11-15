@@ -1,0 +1,38 @@
+/* never · "Can I trust it with my Mac?" The page's one centred head, then four pairs: each Never rule (a
+   scannable head in t-lead, the explanation in ink-2) beside the app's own refusal row for it, on a hairline.
+   One motion, owned by never.js: a row arrives as its rule scrolls in. Rows are not buttons: no hover, no pointer. */
+
+#never .never__head { max-width: calc(40rem + 2 * var(--gutter)); margin-bottom: 3.5rem; text-align: center; }
+#never .never__head h2 { text-wrap: balance; }
+#never .never__lead { margin: 1.25rem auto 0; max-width: 32em; color: var(--ink-2); text-wrap: pretty; }
+
+#never .never__list {
+  max-width: calc(62rem + 2 * var(--gutter)); margin: 0 auto; list-style: none;
+  padding-block: 0; padding-inline: max(var(--gutter), env(safe-area-inset-left)) max(var(--gutter), env(safe-area-inset-right));
+}
+#never .never__pair {
+  display: grid; grid-template-columns: minmax(0, 7fr) minmax(0, 5fr); gap: 40px; align-items: center;
+  padding-block: 1.5rem; border-top: 1px solid var(--line);
+}
+#never .never__pair:last-child { border-bottom: 1px solid var(--line); }
+#never .never__rule { margin: 0; color: var(--ink-2); text-wrap: pretty; max-width: 30em; }
+#never .never__rule strong {
+  display: block; margin-bottom: .25rem; color: var(--ink);
+  font-size: var(--t-lead); line-height: var(--t-lead-lh); font-weight: 600;
+}
+
+/* The tray: one app row on the popover window, as the panel shows it. */
+#never .never__tray { padding: 0; background: none; }
+#never .never__tray .yf-row { background: var(--p-window); box-shadow: var(--p-edge); cursor: default; }
+
+/* Set by never.js only, never by CSS alone: a row below the fold waits for its rule. */
+#never .never__tray .yf-row.is-waiting { opacity: 0; }
+
+#never .never__cap { margin: 1.25rem auto 0; max-width: calc(62rem + 2 * var(--gutter)); color: var(--ink-2); text-align: right; }
+
+@media (max-width: 720px) {
+  #never .never__head { margin-bottom: 2rem; text-align: left; }
+  #never .never__lead { margin-left: 0; }
+  #never .never__pair { grid-template-columns: 1fr; gap: 14px; padding-block: 1.25rem; }
+  #never .never__cap { text-align: left; }
+}

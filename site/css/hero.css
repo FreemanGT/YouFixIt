@@ -1,0 +1,113 @@
+/* hero (owner: hero builder). The example panel hangs from the menu bar pebble; the sentence sits to its left.
+   SPEC §J hero. Scoped under #hero; never restyles .gate* or .btn*. The one .menubar rule (the nav Download
+   steps back to tonal while the hero gate is in view) is at the bottom, keyed on a root flag hero.js sets. */
+
+#hero {
+  /* No extra travel: a held panel left a blank band of paper after it folded (the "huge gaps" note). The panel
+     scrolls with the hero and folds into the pebble once most of it has gone under the menu bar. */
+  --travel: 0px;
+  --hz-amber: rgba(237, 168, 51, 0.30);
+  --hz-green: rgba(37, 158, 128, 0.26);
+  /* the example caption is page copy, so it takes the page's small face, not the panel's */
+  --yf-label-font: 450 var(--t-small)/var(--t-small-lh) var(--f-text);
+  padding-block: 8px 24px;
+  min-height: calc(100svh - var(--bar-h));
+}
+@media (prefers-color-scheme: dark) {
+  #hero { --hz-amber: rgba(240, 180, 69, 0.22); --hz-green: rgba(37, 158, 128, 0.30); }
+}
+
+/* The face's light: centred on the pebble and the panel's head, reaching the H1's right edge; the H1 stays on
+   plain paper. base.css crossfades the two layers by opacity over --d-haze (600 ms). */
+#hero .haze__layer--amber,
+#hero .haze__layer--green {
+  --hz: var(--hz-amber);
+  background: radial-gradient(ellipse 820px 680px at var(--haze-x, 78%) var(--haze-y, 120px),
+    var(--hz) 0%, var(--hz) 22%, color-mix(in srgb, var(--hz) 50%, transparent) 46%, transparent 74%);
+}
+#hero .haze__layer--green { --hz: var(--hz-green); }
+
+/* Two rows: row 1 is as tall as the panel (or the text), row 2 is the sticky's travel. The panel column spans
+   both, so the text centres against the panel itself, in CSS, with nothing measured on load (zero CLS). */
+#hero .hero__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  grid-template-rows: auto var(--travel);
+  column-gap: 80px;
+}
+#hero .hero__text { grid-column: 1; grid-row: 1; align-self: center; padding-block: 24px; }
+#hero .hero__title { max-width: 13.5em; text-wrap: balance; }
+#hero .hero__sub { margin-top: 24px; max-width: 40ch; text-wrap: pretty; }
+#hero .hero__act { margin-top: 36px; max-width: 560px; }
+
+/* The one row under the gate (SPEC): Star it · Free forever. The promise in ink, a step above the note. */
+#hero .hero__row { margin: 14px 0 0; display: flex; flex-wrap: wrap; align-items: center; column-gap: 10px; row-gap: 2px; }
+#hero .hero__star { min-height: 32px; }
+#hero .hero__dot { color: var(--ink-3, var(--ink-2)); }
+#hero .hero__free { color: var(--ink); font-weight: 600; }
+
+/* The panel: 380 px, right edge on the column's right edge, under the menu bar pebble. The column ends in a
+   spacer as tall as the travel, so the sticky panel really holds before it leaves. */
+#hero .hero__panel-col { grid-column: 2; grid-row: 1 / 3; position: relative; }
+#hero .hero__panel-col::after { content: ""; display: block; height: var(--travel); }
+#hero .hero__hang { position: sticky; top: calc(var(--bar-h) + 8px); width: 380px; }
+
+/* 1280 x 720 and other short desktops: the list caps lower so Tidy up stays above the fold. */
+@media (min-width: 721px) and (max-height: 820px) {
+  #hero .hero__panel { --yf-list-max: max(200px, calc(100svh - 420px)); }
+}
+@media (min-width: 721px) and (min-height: 821px) {
+  #hero .hero__panel { --yf-list-max: max(240px, calc(100svh - 360px)); }
+}
+
+/* Narrow desktops and tablets: tighter gap before the phone redesign takes over. */
+@media (min-width: 721px) and (max-width: 1080px) {
+  #hero .hero__grid { column-gap: 48px; }
+}
+
+/* Phone: the ask first, then the product. H1, sub, the gate and its row, then the whole example panel (no
+   inner scroller, so a swipe on it always scrolls the page). The fold point moves to the panel's own top. */
+@media (max-width: 720px) {
+  #hero { padding-block: 20px 56px; min-height: 0; }
+  #hero .hero__grid { display: flex; flex-direction: column; }
+  #hero .hero__text { display: contents; }
+  #hero .hero__head { order: 1; }
+  #hero .hero__act { order: 2; margin-top: 20px; }
+  #hero .hero__panel-col { order: 3; margin-top: 32px; }
+  #hero .hero__panel-col::after { display: none; }
+  #hero .hero__title { max-width: 22ch; }
+  #hero .hero__sub { margin-top: 12px; font-size: 1.0625rem; }
+  #hero .hero__row { margin-top: 12px; flex-direction: column; align-items: flex-start; row-gap: 6px; }
+  #hero .hero__dot { display: none; }
+  /* a 44 px hit area without a 44 px line */
+  #hero .hero__star { min-height: 24px; position: relative; }
+  #hero .hero__star::after { content: ""; position: absolute; inset: -10px -6px; }
+  #hero .hero__hang { position: relative; top: auto; width: 100%; }
+  #hero .hero__panel { --yf-list-max: none; }
+  #hero .yf-panel__scroll { overflow: visible; overscroll-behavior: auto; -webkit-mask-image: none; mask-image: none; }
+  /* the light sits around the panel's head, below the words: the H1 and sub stay on plain paper */
+  #hero .haze__layer--amber, #hero .haze__layer--green {
+    background: radial-gradient(ellipse 95vw 200px at var(--haze-x, 50%) calc(var(--haze-y, 320px) + 60px),
+      var(--hz) 0%, var(--hz) 22%, color-mix(in srgb, var(--hz) 50%, transparent) 46%, transparent 74%);
+  }
+}
+/* Narrow phones: the why line is the point of every row, so it is never cut. */
+@media (max-width: 400px) {
+  #hero .yf-row__why { -webkit-line-clamp: unset; display: block; }
+}
+
+/* The stem: a popover notch on the panel's top edge, right under the menu bar pebble (hero.js sets --stem-x
+   from the pebble's centre and data-stem only when the panel actually sits under it). Its tip meets the bar. */
+#hero .hero__hang[data-stem]::before {
+  content: ""; position: absolute; z-index: 0; top: -6.5px; left: calc(var(--stem-x, 340px) - 6.5px);
+  width: 13px; height: 13px; border-radius: 2.5px 0 0 0; transform: rotate(45deg);
+  background: var(--p-window); box-shadow: -.5px -.5px 0 rgba(0, 0, 0, .14);
+}
+@media (prefers-color-scheme: dark) {
+  #hero .hero__hang[data-stem]::before { box-shadow: -.5px -.5px 0 rgba(255, 255, 255, .12); }
+}
+
+/* While the hero gate is on screen it is the page's one ask: the nav Download steps back to tonal. */
+:root[data-hero-gate] .menubar__download { background: var(--go-tonal); color: var(--go-text); }
+:root[data-hero-gate] .menubar__download:hover { background: var(--go-tonal-hover); }
+.menubar__download { transition: background-color var(--d-hover) var(--ease-arrive), color var(--d-hover) var(--ease-arrive); }

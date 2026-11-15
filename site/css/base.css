@@ -1,0 +1,257 @@
+/* YouFixIt base (architect): reset, type, layout utilities, controls, focus, reduced motion, and the
+   global elements: menu bar, popover shell, haze, pebble, email gate, footer. Sections never restyle these. */
+
+/* ---- Reset ---------------------------------------------------------------------------------------- */
+*, *::before, *::after { box-sizing: border-box; }
+* { margin: 0; }
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; scroll-padding-top: calc(var(--bar-h) + 16px); }
+body {
+  min-height: 100svh;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--f-text);
+  font-size: var(--t-body);
+  line-height: var(--t-body-lh);
+  font-weight: 420;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow-x: clip;
+}
+img, svg, video { display: block; max-width: 100%; }
+svg { overflow: visible; }
+button, input, select, textarea { font: inherit; color: inherit; letter-spacing: inherit; }
+button { background: none; border: 0; padding: 0; cursor: pointer; -webkit-tap-highlight-color: transparent; }
+a { color: inherit; text-underline-offset: .2em; text-decoration-thickness: 1px; }
+h1, h2, h3, p { overflow-wrap: break-word; text-wrap: pretty; }
+h1, h2 { text-wrap: balance; }
+ul[role="list"], ol[role="list"] { list-style: none; padding: 0; }
+[hidden] { display: none !important; }
+::selection { background: var(--go-tonal); color: var(--ink); }
+
+/* ---- Type ----------------------------------------------------------------------------------------- */
+.t-hero, h1 {
+  font-family: var(--f-display); font-size: var(--t-hero); line-height: var(--t-hero-lh);
+  letter-spacing: var(--t-hero-ls); font-weight: var(--t-hero-wght); font-stretch: var(--t-hero-wdth);
+}
+.t-h2, h2 {
+  font-family: var(--f-display); font-size: var(--t-h2); line-height: var(--t-h2-lh);
+  letter-spacing: var(--t-h2-ls); font-weight: var(--t-h2-wght); font-stretch: var(--t-h2-wdth);
+}
+.t-giant {
+  font-family: var(--f-display); font-size: var(--t-giant); line-height: var(--t-giant-lh);
+  letter-spacing: var(--t-giant-ls); font-weight: var(--t-giant-wght); font-stretch: var(--t-giant-wdth);
+}
+.t-sentence { font-family: var(--f-display); font-size: var(--t-sentence); line-height: var(--t-sentence-lh); font-weight: var(--t-sentence-wght); letter-spacing: -0.01em; }
+.t-lead { font-size: var(--t-lead); line-height: var(--t-lead-lh); font-weight: 430; }
+.t-body { font-size: var(--t-body); line-height: var(--t-body-lh); }
+.t-small { font-size: var(--t-small); line-height: var(--t-small-lh); font-weight: 450; }
+.t-data { font-family: var(--f-mono); font-size: var(--t-data); font-weight: 450; font-variant-numeric: tabular-nums; }
+.muted { color: var(--ink-2); }
+.go-text { color: var(--go-text); }
+.sr-only, .visually-hidden {
+  position: absolute !important; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); clip-path: inset(50%); white-space: nowrap; border: 0;
+}
+
+/* ---- Layout --------------------------------------------------------------------------------------- */
+.wrap { width: 100%; max-width: calc(var(--col) + 2 * var(--gutter)); margin-inline: auto; padding-inline: max(var(--gutter), env(safe-area-inset-left)) max(var(--gutter), env(safe-area-inset-right)); }
+.s { position: relative; padding-block: var(--section-pad); }
+.s--paper { background: var(--paper); }
+.s--paper-2 { background: var(--paper-2); }
+.grid-12 { display: grid; grid-template-columns: repeat(12, minmax(0, 1fr)); column-gap: var(--gutter); }
+@media (max-width: 720px) { .grid-12 { grid-template-columns: minmax(0, 1fr); } .grid-12 > * { grid-column: 1 / -1 !important; } }
+.stack > * + * { margin-top: var(--stack, 1rem); }
+
+/* Height collapse wrapper for `leave`/`arrive` (motion.js): child must be overflow-hidden-safe. */
+.collapse { display: grid; grid-template-rows: 1fr; }
+.collapse > * { min-height: 0; overflow: hidden; }
+
+/* ---- Focus ---------------------------------------------------------------------------------------- */
+:focus { outline: none; }
+/* The ring follows each control's own radius (outline tracks border-radius); nothing reshapes on focus. */
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+.btn:focus-visible, .pill:focus-visible { box-shadow: 0 0 0 2px var(--paper); }
+/* The skip link: the first Tab stop, visible when focused. */
+.skip:focus-visible {
+  position: fixed !important; top: 8px; left: 16px; width: auto; height: auto; margin: 0; clip: auto; clip-path: none;
+  padding: 10px 16px; z-index: 100; background: var(--paper); color: var(--ink); border-radius: var(--r-pill);
+  box-shadow: 0 0 0 2px var(--go); outline: none; white-space: nowrap; text-decoration: none; font-weight: 560;
+}
+
+/* ---- Controls ------------------------------------------------------------------------------------- */
+/* Every control: tone shift + 1 px lift in 150 ms (Q55); pressed scales to .98 in 120 ms. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: .5em;
+  min-height: 44px; padding: 0 1.25em; border-radius: var(--r-pill);
+  font-family: var(--f-text); font-size: var(--t-btn); font-weight: 600; font-stretch: 106%; line-height: 1;
+  text-decoration: none; white-space: nowrap;
+  transition: background-color var(--d-hover) var(--ease-arrive), color var(--d-hover) var(--ease-arrive), transform var(--d-hover) var(--ease-arrive);
+}
+.btn:hover { transform: translateY(-1px); }
+.btn:active { transform: scale(.98); transition-duration: var(--d-feedback); }
+.btn--go { background: var(--go); color: var(--on-go); }
+.btn--go:hover { background: var(--go-hover); }
+.btn--tonal { background: var(--go-tonal); color: var(--go-text); }
+.btn--tonal:hover { background: var(--go-tonal-hover); }
+.btn--text { min-height: 0; padding: 0; color: var(--go-text); font-weight: 600; }
+.btn--text:hover { text-decoration: underline; }
+.link { color: var(--go-text); font-weight: 560; text-decoration: none; transition: color var(--d-hover) var(--ease-arrive); }
+.link:hover { text-decoration: underline; }
+
+/* The return-key glyph in a key (on a go pill: white 22 %; on tonal: tinted). */
+.key {
+  display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: var(--r-key);
+  background: rgba(255, 255, 255, .22); color: currentColor; flex: none;
+}
+.btn--tonal .key { background: color-mix(in srgb, var(--go-text) 14%, transparent); }
+.key svg { width: 14px; height: 14px; }
+.icon { width: 1em; height: 1em; flex: none; }
+
+/* The star link (drawn star + words + live count). */
+.star { display: inline-flex; align-items: center; gap: .4em; color: var(--go-text); font-weight: 600; text-decoration: none; }
+.star svg { width: 1em; height: 1em; }
+.star .star__fill { fill: transparent; transition: fill var(--d-feedback) var(--ease-arrive); }
+.star:hover .star__fill { fill: currentColor; }
+[data-stars] { font-family: var(--f-mono); font-size: .9375em; font-weight: 500; font-variant-numeric: tabular-nums; }
+[data-stars]:empty { display: none; }
+
+/* ---- The pebble: drawn and coloured by component.css (.yf-pb); sizes set here per place via --pb-size. -- */
+.yf-pb--inline { --pb-size: 1.25em; vertical-align: -0.28em; }
+
+/* ---- The menu bar (the nav; SPEC §I.1) -------------------------------------------------------------
+   Mac menu bar material: a full-width translucent strip, blurred, a hairline under it. Left, like the
+   frontmost app's name: the mark and the bold wordmark. Right, like menu extras: Star, Download and the
+   live pebble, which shows the pressed menu-extra fill while its panel hangs open below it. No fake menus. */
+.menubar {
+  position: sticky; top: 0; z-index: 50; height: var(--bar-h);
+  background: var(--bar); border-bottom: .5px solid var(--line);
+  -webkit-backdrop-filter: saturate(1.8) blur(24px); backdrop-filter: saturate(1.8) blur(24px);
+}
+.menubar__inner { height: 100%; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.menubar__inner { padding-inline: max(var(--gutter), env(safe-area-inset-left)) max(var(--gutter), env(safe-area-inset-right)); }
+.menubar__word {
+  display: inline-flex; align-items: center; gap: 8px; min-height: var(--hit); text-decoration: none;
+  font-family: var(--f-display); font-size: var(--t-mark); font-weight: 720; font-stretch: 96%; letter-spacing: -.01em; line-height: 1;
+}
+.menubar__mark { --pb-size: var(--t-mark-pebble); }
+.menubar__right { display: flex; align-items: center; gap: 4px; }
+.menubar__star, .menubar__download, .menubar__pebble { position: relative; }
+.menubar__star { font-size: var(--t-small); min-height: 24px; padding: 0 8px; border-radius: var(--r-key); }
+.menubar__download { min-height: 24px; padding: 0 12px; font-size: var(--t-small); margin-inline: 4px; gap: 0; }
+.menubar__pebble {
+  display: inline-grid; place-items: center; min-width: 24px; min-height: 24px; padding: 2px 8px; border-radius: 6px;
+  transition: background-color var(--d-hover) var(--ease-arrive);
+}
+/* the menu-extra pressed fill: while the popover is open, or while the hero panel hangs from it */
+.menubar__pebble:hover, .menubar__pebble[aria-expanded="true"], .menubar__pebble[data-hanging] { background: color-mix(in srgb, var(--ink) 11%, transparent); }
+.menubar__pebble .yf-pb { --pb-size: var(--pebble-size); gap: 4px; --yf-count-font: 600 var(--t-small)/1 var(--f-text); }
+/* The count keeps its slot (1ch, tabular) when empty, so Star and Download never shift on Tidy up / Undo. */
+.menubar__pebble .yf-pb__count[hidden] { display: inline-block !important; visibility: hidden; }
+.menubar__pebble .yf-pb__count { text-align: left; }
+/* Hit areas reach 44 px on touch screens (tablets included) without changing the bar's look. */
+.menubar__star::after, .menubar__download::after, .menubar__pebble::after { content: ""; position: absolute; inset: -4px 0; }
+@media (pointer: coarse), (max-width: 720px) {
+  .menubar__star::after, .menubar__download::after, .menubar__pebble::after { inset: calc((44px - 100%) / -2) -2px; }
+  .menubar__word { min-height: 44px; }
+}
+@media (max-width: 720px) {
+  .menubar__star { display: none; } /* the Download pill is the first-screen CTA; Star it lives in the hero */
+  .menubar__right { gap: 8px; }
+  .menubar__download { min-height: 36px; padding: 0 14px; }
+  .menubar__download::after { inset: -4px 0; }
+  .menubar__pebble { padding: 0 4px; }
+  .menubar__pebble .yf-pb { --yf-count-font: 600 14px/1 var(--f-text); }
+}
+@media (max-width: 480px) { .menubar__for { display: none; } }
+
+/* ---- Popover (the menu bar view of the example; panel.js fills .popover__panel) ---------------------- */
+.popover {
+  position: fixed; z-index: 60; top: calc(var(--bar-h) + 8px); right: 16px; width: 380px;
+  max-height: calc(100svh - var(--bar-h) - 24px); overflow: auto; overscroll-behavior: contain;
+  border-radius: var(--r-panel); visibility: hidden; opacity: 0;
+}
+.popover:not([hidden]) { visibility: visible; opacity: 1; }
+.popover__label { margin: 8px 4px 4px; font-size: var(--t-small); color: var(--ink-2); }
+@media (max-width: 720px) {
+  .popover { left: 12px; right: 12px; width: auto; max-height: calc(100svh - 64px); }
+}
+
+/* ---- The haze: the face's light (SPEC §I.2). Placed inside the hero wrapper by the template. -------- */
+.haze ~ * { position: relative; z-index: 1; } /* content sits above the light */
+.haze { position: absolute; inset: 0; pointer-events: none; contain: strict; z-index: 0; overflow: hidden; }
+.haze__layer {
+  position: absolute; inset: 0; opacity: 0;
+  transition: opacity var(--d-haze) var(--ease-arrive);
+}
+.haze__layer--amber { background: radial-gradient(50vmax 36vmax at var(--pebble-x, 90%) 0, var(--haze-amber) 0%, transparent 70%); }
+.haze__layer--green { background: radial-gradient(50vmax 36vmax at var(--pebble-x, 90%) 0, var(--haze-green) 0%, transparent 70%); }
+html[data-mood="heavy"] .haze__layer--amber, html:not([data-mood]) .haze__layer--amber { opacity: 1; }
+html[data-mood="working"] .haze__layer--green, html[data-mood="done"] .haze__layer--green { opacity: 1; }
+
+/* ---- The mood light: the example's state lights the screens below the hero too (amber while it is
+   heavy, green once tidied). Two layers crossfade by opacity; the paper stays the paper. -------------- */
+#finds, #never { position: relative; isolation: isolate; }
+#finds::before, #finds::after, #never::before, #never::after {
+  content: ""; position: absolute; inset: 0; z-index: -1; pointer-events: none; opacity: 0;
+  transition: opacity var(--d-haze) var(--ease-arrive);
+}
+#finds::before { background: radial-gradient(ellipse 52% 62% at 78% 46%, var(--mood-amber), transparent 72%); }
+#finds::after  { background: radial-gradient(ellipse 52% 62% at 78% 46%, var(--mood-green), transparent 72%); }
+#never::before { background: radial-gradient(ellipse 70% 58% at 50% 34%, var(--mood-amber), transparent 72%); }
+#never::after  { background: radial-gradient(ellipse 70% 58% at 50% 34%, var(--mood-green), transparent 72%); }
+html[data-mood="heavy"] :is(#finds, #never)::before, html:not([data-mood]) :is(#finds, #never)::before { opacity: 1; }
+html:is([data-mood="working"], [data-mood="done"]) :is(#finds, #never)::after { opacity: 1; }
+html[data-mood="calm"] :is(#finds, #never)::after { opacity: .6; }
+@media (max-width: 720px) {
+  #finds::before, #finds::after { background-position: center; }
+  #finds::before { background: radial-gradient(ellipse 120% 40% at 50% 70%, var(--mood-amber), transparent 72%); }
+  #finds::after  { background: radial-gradient(ellipse 120% 40% at 50% 70%, var(--mood-green), transparent 72%); }
+}
+
+/* ---- The email gate (SPEC §I.4; one component, hero and finale) ------------------------------------ */
+.gate { width: 100%; max-width: 480px; }
+.gate__label { display: block; margin-bottom: 8px; font-size: var(--t-small); line-height: var(--t-small-lh); font-weight: 450; color: var(--ink-2); }
+.gate__capsule {
+  display: flex; align-items: center; gap: 6px; height: 56px; padding: 6px 6px 6px 20px;
+  border-radius: var(--r-pill); background: var(--paper); border: 1px solid var(--line);
+  transition: border-color var(--d-hover) var(--ease-arrive), box-shadow var(--d-hover) var(--ease-arrive);
+}
+.s--paper .gate__capsule { background: color-mix(in srgb, var(--paper) 40%, #fff); }
+.s--paper-2 .gate__capsule { background: var(--paper); }
+@media (prefers-color-scheme: dark) { .s--paper .gate__capsule { background: var(--paper-2); } }
+.gate__capsule:focus-within { border-color: var(--go); box-shadow: 0 0 0 1px var(--go); }
+.gate__input {
+  flex: 1; min-width: 0; height: 100%; border: 0; background: transparent; outline: none;
+  font-size: 16px; font-family: var(--f-text); color: var(--ink);
+}
+.gate__input::placeholder { color: var(--ink-2); opacity: 1; }
+.gate__input[aria-invalid="true"] { caret-color: var(--face-amber); }
+.gate__btn { height: 44px; padding: 0 8px 0 18px; }
+.gate__btn.is-downloading .key { visibility: hidden; width: 0; }
+.gate__error { display: flex; align-items: center; gap: 8px; margin-top: 10px; font-size: var(--t-small); line-height: var(--t-small-lh); color: var(--ink); }
+.gate__error .yf-pb { --pb-size: 19px; }
+.gate__note { margin-top: 10px; font-size: var(--t-small); line-height: var(--t-small-lh); color: var(--ink-2); max-width: 46ch; }
+.gate__note a { color: var(--go-text); font-weight: 560; text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
+.gate__hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+@media (max-width: 720px) {
+  .gate__capsule { flex-direction: column; align-items: stretch; height: auto; padding: 0; border: 0; background: none !important; gap: 10px; box-shadow: none !important; }
+  .gate__input { flex: none; height: 52px; padding: 0 18px; border-radius: var(--r-pill); border: 1px solid var(--line); background: var(--paper); }
+  .gate__input:focus-visible { border-color: var(--go); box-shadow: 0 0 0 1px var(--go); outline: none; }
+  .gate__btn { height: 52px; width: 100%; padding: 0 18px; }
+}
+
+/* ---- Footer ---------------------------------------------------------------------------------------- */
+.foot { padding-block: 40px calc(32px + env(safe-area-inset-bottom)); padding-inline: max(var(--gutter), env(safe-area-inset-left)) max(var(--gutter), env(safe-area-inset-right)); text-align: center; font-size: var(--t-small); line-height: var(--t-small-lh); color: var(--ink-2); }
+.foot a { color: inherit; display: inline-block; padding-block: 2px; }
+@media (max-width: 720px), (pointer: coarse) { .foot a { padding-block: 12px; } }
+.foot a:hover { color: var(--ink); }
+.foot__dot { margin-inline: .5em; }
+
+/* ---- Reduced motion: shorter and calmer, never hidden (SPEC §L). JS verbs have their own variants. -- */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { scroll-behavior: auto !important; }
+  .btn:hover { transform: none; }
+  .haze__layer { transition-duration: var(--d-state); }
+}

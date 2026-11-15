@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Component lab</title>
+<link rel="stylesheet" href="css/component.css">
+<style>
+  :root { --ink: #191B1A; --ink-2: #565C59; --paper: #F2F3F1; --go: #177D66; color-scheme: light dark; }
+  @media (prefers-color-scheme: dark) { :root { --ink: #ECEDE8; --ink-2: #9CA29E; --paper: #111312; --go: #19846B; } }
+  body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.45 system-ui, sans-serif; }
+  .lab { padding: 24px; display: grid; gap: 32px; }
+  .lab h2 { font-size: 13px; font-weight: 600; margin: 0 0 12px; color: var(--ink-2); }
+  .bar { display: flex; justify-content: flex-end; align-items: center; gap: 16px; height: 36px; padding: 0 16px;
+         background: rgba(242,243,241,.72); border-bottom: 1px solid #DEDDD6; }
+  .bar__face { display: inline-flex; align-items: center; min-width: 44px; height: 30px; padding: 0 6px; border: 0; border-radius: 6px; background: none; color: inherit; cursor: pointer; }
+  .bar__face:focus-visible { outline: 2px solid var(--go); outline-offset: 2px; }
+  .row { display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-start; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; }
+  .controls button { font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 999px; border: 1px solid #DEDDD6; background: none; color: inherit; cursor: pointer; }
+  .pane { padding: 24px; border-radius: 16px; }
+  .pane[data-scheme="light"] { background: #F2F3F1; color: #191B1A; }
+  .pane[data-scheme="dark"] { background: #111312; color: #ECEDE8; --ink-2: #9CA29E; }
+  .shot { width: 380px; display: block; }
+  .poses { display: grid; grid-template-columns: repeat(10, 64px); gap: 8px 0; align-items: center; justify-items: center; font-size: 12px; color: var(--ink-2); }
+  .poses .yf-pb { --pb-size: 44px; }
+  .popover { position: fixed; right: 16px; top: 44px; z-index: 5; }
+  /* compare view: real render (2x PNG at 1x) beside the rebuild, same width */
+  body[data-view="compare"] .lab > :not(.cmp), body[data-view="poses"] .lab > :not(.ps) { display: none; }
+  body:not([data-view="compare"]) .cmp, body:not([data-view="poses"]) .ps { display: none; }
+</style>
+</head>
+<body>
+<header class="bar"><span style="margin-right:auto;font-weight:650">YouFixIt lab</span><button class="bar__face" id="barFace" aria-haspopup="dialog" aria-expanded="false"></button></header>
+<main class="lab">
+  <section>
+    <h2>Store</h2>
+    <div class="controls">
+      <button data-go="tidy">Tidy up</button><button data-go="undo">Undo</button><button data-go="reset">Reset</button>
+      <button data-phase="heavy">heavy</button><button data-phase="working">working</button><button data-phase="done">done</button><button data-phase="calm">calm</button>
+      <button data-face="blink">blink</button><button data-face="glance">glance</button><button data-face="hop">hop</button><button data-face="perk">perk</button>
+    </div>
+  </section>
+  <section class="row">
+    <div class="pane" data-scheme="light"><h2>Light</h2><div id="pLight"></div></div>
+    <div class="pane" data-scheme="dark"><h2>Dark</h2><div id="pDark"></div></div>
+  </section>
+  <section>
+    <h2>Row replicas (finds, never)</h2>
+    <div class="row" id="rows" style="max-width:820px"></div>
+  </section>
+  <section class="cmp row" id="cmp"></section>
+  <section class="ps" id="ps"></section>
+</main>
+<div class="popover" id="pop" hidden></div>
+<script type="module">
+import * as Y from './js/lib/component.js';
+window.Y = Y;
+const qs = new URLSearchParams(location.search);
+const view = qs.get('view') || 'live';
+document.body.dataset.view = view;
+const store = Y.createExampleStore({ undoWindow: +(qs.get('undo') || 60000) });
+window.store = store;
+
+if (view === 'live') {
+  const a = Y.mountPanel(document.getElementById('pLight'), { store, id: 'pl' });
+  const b = Y.mountPanel(document.getElementById('pDark'), { store, id: 'pd', label: false });
+  const bar = Y.mountBarFace(document.getElementById('barFace'), { store });
+  window.views = { a, b, bar };
+  document.querySelector('.controls').addEventListener('click', (e) => {
+    const t = e.target.closest('button'); if (!t) return;
+    if (t.dataset.go) store.dispatch(t.dataset.go);
+    if (t.dataset.phase) store.dispatch({ type: 'phase', phase: t.dataset.phase });
+    const f = t.dataset.face;
+    if (f) for (const p of [bar.pebble, a.face]) f === 'perk' ? p.perk() : p[f]();
+  });
+  // Popover view of the same store, opened from the bar face.
+  const pop = document.getElementById('pop'), btn = document.getElementById('barFace');
+  let popView = null;
+  const close = async () => { await Y.fold(pop, btn, false); pop.hidden = true; popView?.destroy(); popView = null; btn.setAttribute('aria-expanded', 'false'); btn.focus(); };
+  btn.addEventListener('click', () => {
+    if (popView) return close();
+    pop.hidden = false; popView = Y.mountPanel(pop, { store, mode: 'popover', onClose: close, id: 'pp' });
+    btn.setAttribute('aria-expanded', 'true'); Y.fold(pop, btn, true); popView.focus();
+  });
+  const rows = document.getElementById('rows');
+  rows.innerHTML = '<div class="yf-p" style="display:grid;gap:6px;width:360px">'
+    + Y.rowHTML({ name: 'Docker', why: 'No containers running, nothing using it', glyph: 'cube', mib: 3788.8 })
+    + Y.rowHTML({ name: 'node', why: 'Port 3000 in my-app, from a finished coding session', glyph: 'server', mib: 240 }) + '</div>'
+    + '<div class="yf-p" style="display:grid;gap:6px;width:360px;padding:16px;border-radius:12px;background:var(--p-window);box-shadow:var(--p-shadow)">'
+    + Y.rowHTML({ name: 'tmux', why: 'It holds terminal sessions, so it stays.', glyph: 'terminal' }, { well: 'grey', size: false })
+    + Y.rowHTML({ name: 'postgres', why: 'Something is connected to it, so it stays.', glyph: 'database' }, { well: 'grey', size: false }) + '</div>';
+}
+
+if (view === 'compare') {
+  // ?state=heavy|done|working|calm&scheme=light|dark&shot=heavy-light
+  const state = qs.get('state') || 'heavy', scheme = qs.get('scheme') || 'light';
+  const shot = qs.get('shot') || `${state === 'calm' ? 'empty' : state === 'working' ? 'working-mid' : state}-${scheme}`;
+  const cmp = document.getElementById('cmp');
+  cmp.innerHTML = `<div class="pane" data-scheme="${scheme}"><h2>Real: ${shot}.png</h2><img class="shot" src="../snapshots/${shot}.png" alt=""></div>`
+    + `<div class="pane" data-scheme="${scheme}"><h2>Rebuilt: ${state}</h2><div id="live"></div></div>`;
+  const v = Y.mountPanel(document.getElementById('live'), { store, id: 'cv', label: false });
+  if (state !== 'heavy') store.dispatch({ type: 'phase', phase: state });
+  if (qs.get('know')) store.dispatch({ type: 'know', open: true });
+  if (qs.get('act')) setTimeout(() => store.dispatch(qs.get('act')), 300); // e.g. act=tidy, shoot mid-leave
+}
+
+if (view === 'poses') {
+  const scheme = qs.get('scheme') || 'light';
+  const names = ['calm', 'blink', 'glance', 'light', 'heavy', 'working', 'done', 'hop', 'paused'];
+  const ps = document.getElementById('ps');
+  ps.innerHTML = `<div class="pane" data-scheme="${scheme}"><h2>Real: icon-poses-${scheme}.png (top) · rebuilt bar pebble at 44 px, then the panel face</h2>`
+    + `<img src="../snapshots/icon-poses-${scheme}.png" style="width:596px;display:block;margin-bottom:16px" alt="">`
+    + `<div class="poses">${names.map((n) => `<span class="yf-pb" data-p="${n}"></span>`).join('')}<span class="yf-pb" data-p="light" data-c="3"></span>`
+    + names.map((n) => `<span>${n}</span>`).join('') + '<span>count</span>'
+    + `${names.map((n) => `<span class="yf-p" data-f="${n}"></span>`).join('')}</div></div>`;
+  ps.querySelectorAll('[data-p]').forEach((el) => new Y.Pebble(el, { pose: el.dataset.p, count: el.dataset.c ? +el.dataset.c : null }));
+  ps.querySelectorAll('[data-f]').forEach((el) => { el.innerHTML = Y.pebbleSVG(el.dataset.f, { variant: 'face' }); });
+}
+</script>
+</body>
+</html>

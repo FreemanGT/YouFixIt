@@ -1,0 +1,12 @@
+{
+  "name": "youfixit-web",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "qa": "node qa.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^24.10.0"
+  }
+}

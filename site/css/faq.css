@@ -1,0 +1,121 @@
+/* faq · "What else should I know before I install it?" (SPEC §J faq). No JS: native <details name="faq">.
+   paper-2 begins here: one blended 160 px seam from the paper above, no rule. */
+
+#faq {
+  background: linear-gradient(to bottom, var(--paper), var(--paper-2) 160px);
+}
+
+#faq .faq__grid { align-items: start; }
+
+/* H2 left in cols 1 to 4, sticky under the menu bar on desktop */
+#faq .faq__title {
+  grid-column: 1 / 5;
+  position: sticky;
+  top: 96px;
+  margin: 0;
+  /* cap tops line up with the first question: its 2 px margin + 20 px padding + half-leading
+     sit about 21 px lower than the H2 cap at 48/50 over 20/29 (measured, both fixed above 720) */
+  padding-top: 24px;
+}
+
+/* Rows in cols 5 to 12, max 720; 1 px --line between, no cards */
+#faq .faq__list {
+  grid-column: 5 / 13;
+  max-width: 720px;
+  width: 100%;
+}
+#faq .faq__row + .faq__row { border-top: 1px solid var(--line); }
+
+#faq .faq__sum {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 52px;
+  padding-block: 20px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: var(--t-lead);
+  font-weight: 560;
+  /* the fill sits inside the hairlines: 12 px wider than the text on each side, 2 px clear of the rules */
+  margin-inline: -12px;
+  padding-inline: 12px;
+  margin-block: 2px;
+  border-radius: var(--r-chip);
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--d-hover) var(--ease-arrive);
+}
+#faq .faq__sum::-webkit-details-marker { display: none; }
+#faq .faq__sum::marker { content: ""; }
+#faq .faq__sum:focus-visible { outline-offset: 4px; }
+
+#faq .faq__q {
+  font-family: var(--f-text);
+  font-size: var(--t-lead);
+  line-height: var(--t-lead-lh);
+  font-weight: 560;
+  letter-spacing: -0.005em;
+  text-wrap: pretty;
+}
+
+/* Drawn chevron: points right when closed, turns 90 degrees to point down when open */
+#faq .faq__chev {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: transform var(--d-feedback) var(--ease-arrive), stroke var(--d-hover) linear;
+}
+#faq .faq__row[open] .faq__chev { transform: rotate(90deg); }
+@media (hover: hover) {
+  #faq .faq__sum:hover { background-color: color-mix(in srgb, var(--ink) 4%, transparent); }
+  #faq .faq__sum:hover .faq__chev { stroke: var(--ink); }
+}
+
+#faq .faq__a {
+  padding-bottom: 24px;
+  padding-right: 40px;
+  color: var(--ink-2);
+  font-size: var(--t-body);
+  line-height: var(--t-body-lh);
+}
+#faq .faq__a p { margin: 0; max-width: 34em; text-wrap: pretty; }
+/* Links in prose are underlined, not told apart by colour alone (WCAG 1.4.1) */
+#faq .faq__a .link {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+/* Height: 220 ms arrive where the browser can size to auto; instant elsewhere */
+@supports (interpolate-size: allow-keywords) and selector(::details-content) {
+  #faq .faq__list { interpolate-size: allow-keywords; }
+  #faq .faq__row::details-content {
+    block-size: 0;
+    overflow: clip;
+    transition:
+      block-size var(--d-state) var(--ease-arrive),
+      content-visibility var(--d-state) allow-discrete;
+  }
+  #faq .faq__row[open]::details-content { block-size: auto; }
+}
+
+/* 390: H2 above the rows, not sticky; 52 px minimum rows */
+@media (max-width: 720px) {
+  #faq .faq__title { position: static; padding-top: 0; margin-bottom: 24px; }
+  #faq .faq__sum { padding-block: 14px; gap: 16px; }
+  #faq .faq__a { padding-right: 0; padding-bottom: 20px; }
+}
+
+/* Reduced motion: rows open instantly; the chevron swaps without rotating */
+@media (prefers-reduced-motion: reduce) {
+  #faq .faq__chev { transition: stroke var(--d-hover) var(--ease-arrive); }
+  #faq .faq__row::details-content { transition: none; }
+}
+html.reduced #faq .faq__chev { transition: stroke var(--d-hover) linear; }
+html.reduced #faq .faq__row::details-content { transition: none; }

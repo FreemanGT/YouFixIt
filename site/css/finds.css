@@ -1,0 +1,102 @@
+/* finds · "What does it actually find on my Mac, and how will I know when to open it?" (owner: finds builder)
+   Two short sentences you read; their phrases are chips. One docked app row beside them shows how the app would say it. */
+
+#finds .finds__grid { align-items: start; row-gap: 0; }
+#finds .finds__head { grid-column: 1 / 10; grid-row: 1; }
+#finds .finds__s--run { grid-column: 1 / 9; grid-row: 2; }
+#finds .finds__s--space { grid-column: 1 / 9; grid-row: 3; }
+#finds .finds__also { grid-column: 1 / 9; grid-row: 4; }
+#finds .finds__notes { grid-column: 1 / 9; grid-row: 5; }
+#finds .finds__dock { grid-column: 9 / 13; grid-row: 2 / 6; align-self: stretch; justify-self: stretch; margin: 0; }
+
+#finds .finds__title { margin: 0 0 20px; max-width: 15em; text-wrap: balance; }
+
+/* ---- the lead: a small legend of the three faces you will see in your own menu bar ---- */
+#finds .finds__lead { margin: 0 0 40px; max-width: 34em; color: var(--ink-2); text-wrap: pretty; }
+#finds .finds__face { white-space: nowrap; color: var(--ink); }
+#finds .finds__lead .yf-pb {
+  --pb-calm: #858A87; --pb-size: 1.5em; --yf-count-font: 520 1em/1 var(--f-mono);
+  gap: .14em; vertical-align: -.42em; margin: -.3em .12em -.3em 0;
+}
+#finds .finds__lead .yf-pb__count { color: var(--ink); }
+
+/* ---- the two sentences: the shared sentence face; each whole phrase sits in a chip ---- */
+#finds .finds__s { margin: 0; max-width: 25em; color: var(--ink); text-wrap: pretty; }
+#finds .finds__s--space { margin-top: .5em; }
+#finds .nw { white-space: nowrap; }
+
+#finds .chip {
+  position: relative; display: inline; white-space: nowrap;
+  /* Tight right padding: the comma after a chip sits against its word, not a space away. At rest a chip is
+     text with a soft green underline and its glyph, so the two sentences read as sentences, not a wall of pills;
+     the fill shows on hover and when pressed. */
+  margin: 0; padding: .02em .1em .06em .14em; border: 0; border-radius: var(--r-chip);
+  font: inherit; line-height: 1.22; letter-spacing: inherit; color: inherit; text-align: start;
+  -webkit-box-decoration-break: clone; box-decoration-break: clone;
+  background: transparent;
+  text-decoration: underline; text-decoration-thickness: .06em; text-underline-offset: .16em;
+  text-decoration-color: color-mix(in srgb, var(--go) 45%, transparent);
+  cursor: pointer; -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--d-hover) var(--ease-arrive), box-shadow var(--d-hover) var(--ease-arrive), transform var(--d-hover) var(--ease-arrive);
+}
+#finds .chip__well {
+  position: relative; display: inline-block; width: .72em; height: .72em; margin-right: .22em;
+  border-radius: 50%; vertical-align: -.08em;
+  background: color-mix(in srgb, var(--go) 14%, transparent); color: var(--go-text);
+  transition: background-color var(--d-hover) var(--ease-arrive), color var(--d-hover) var(--ease-arrive);
+}
+#finds .chip__well::before {
+  content: ""; position: absolute; inset: 17%; background: currentColor;
+  -webkit-mask: var(--g) center / contain no-repeat; mask: var(--g) center / contain no-repeat;
+}
+@media (hover: hover) {
+  #finds .chip:hover { background: color-mix(in srgb, var(--ink) 6%, transparent); text-decoration-color: var(--go); }
+}
+/* Pressed: a ring and a filled well, so the state does not rest on a tint alone. */
+#finds .chip[aria-pressed="true"] { background: var(--go-tonal); box-shadow: inset 0 0 0 1.5px var(--go); text-decoration-color: transparent; }
+#finds .chip[aria-pressed="true"] .chip__well { background: var(--go); color: var(--on-go, #fff); }
+#finds .chip:focus-visible { outline: 2px solid var(--go); outline-offset: 2px; }
+
+/* ---- the docked example row: the panel's true width, right edge on the column like the hero and never trays ---- */
+#finds .finds__sticky { position: sticky; top: calc(50vh - 80px); width: min(100%, 380px); margin: .4rem 0 0 auto; }
+#finds .finds__tray {
+  padding: var(--p-pad); border-radius: var(--r-panel);
+  background: var(--p-window); box-shadow: var(--p-shadow); color: var(--p-text);
+  font: 400 13px/1.25 var(--p-system); -webkit-font-smoothing: antialiased;
+}
+#finds .finds__group { margin: 2px 4px 8px; font-size: 12px; line-height: 15px; color: var(--p-secondary); }
+#finds .finds__tray .yf-row { min-height: 70px; }
+#finds .finds__tray .yf-row__text { margin-right: 6px; }
+#finds .finds__cap { margin: 12px 4px 0; color: var(--ink-2); }
+
+/* ---- the plain clause and the muted notes ---- */
+#finds .finds__also { margin: 24px 0 0; max-width: 36em; color: var(--ink-2); text-wrap: pretty; }
+#finds .finds__notes { margin: 56px 0 0; max-width: 36em; color: var(--ink-2); }
+#finds .finds__notes p { margin: 0; text-wrap: pretty; }
+#finds .finds__notes p + p { margin-top: .9em; }
+
+/* ---- 390: the card sits right under the first sentence, so a press below it swaps it in view ---- */
+@media (max-width: 720px) {
+  #finds .finds__head, #finds .finds__s, #finds .finds__dock, #finds .finds__also, #finds .finds__notes { grid-row: auto; }
+  #finds .finds__s { line-height: 2; }
+  #finds .finds__s--space { margin-top: 0; }
+  #finds .finds__dock { margin: 20px 0 24px; }
+  #finds .finds__sticky { position: static; width: 100%; margin: 0; }
+  #finds .finds__notes { margin-top: 40px; }
+  #finds .chip { white-space: normal; }
+  /* A 44 px tall hit area; line-height 2 keeps neighbouring chips' areas from overlapping much. */
+  #finds .chip::after { content: ""; position: absolute; left: 0; right: 0; top: 50%; height: 44px; transform: translateY(-50%); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  #finds .chip, #finds .chip__well { transition-duration: var(--d-feedback); }
+}
+
+/* ---- chip glyphs: the panel's own stroke glyphs (component GLYPHS), as masks so the still page is complete ---- */
+#finds .chip[data-k="apps"] .chip__well::before { --g: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.6%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect x=%221.5%22 y=%222.5%22 width=%2213%22 height=%2211%22 rx=%222%22/%3E%3Cpath d=%22M1.5 5.6h13M3.8 4h.01M5.6 4h.01%22/%3E%3C/svg%3E"); }
+#finds .chip[data-k="docker"] .chip__well::before { --g: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.6%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M8 1.6 14 4.8v6.4L8 14.4 2 11.2V4.8z%22/%3E%3Cpath d=%22M2 4.8 8 8l6-3.2M8 8v6.4%22/%3E%3C/svg%3E"); }
+#finds .chip[data-k="sims"] .chip__well::before { --g: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.6%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect x=%224.5%22 y=%221.5%22 width=%227%22 height=%2213%22 rx=%221.8%22/%3E%3Cpath d=%22M7 12.2h2%22/%3E%3C/svg%3E"); }
+#finds .chip[data-k="servers"] .chip__well::before { --g: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.6%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect x=%222%22 y=%222.5%22 width=%2212%22 height=%224.6%22 rx=%221.2%22/%3E%3Crect x=%222%22 y=%228.9%22 width=%2212%22 height=%224.6%22 rx=%221.2%22/%3E%3Cpath d=%22M4.6 4.8h.01M4.6 11.2h.01M7 4.8h4.4M7 11.2h4.4%22/%3E%3C/svg%3E"); }
+#finds .chip[data-k="xcode"] .chip__well::before { --g: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.6%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Cpath d=%22M8.4 7.6 2.5 13.5a1.1 1.1 0 0 0 1.6 1.6L10 9.2%22/%3E%3Cpath d=%22M6.2 5 9 2.2c1.5-.8 3-.4 4 .6l1.4 1.4-1.3 1.3-.9-.3-2.6 2.6z%22/%3E%3C/svg%3E"); }
+#finds .chip[data-k="caches"] .chip__well::before { --g: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.6%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect x=%221.5%22 y=%222.5%22 width=%2213%22 height=%223.5%22 rx=%221%22/%3E%3Cpath d=%22M2.5 6v6.5c0 .6.4 1 1 1h9c.6 0 1-.4 1-1V6M6.5 8.8h3%22/%3E%3C/svg%3E"); }
+#finds .chip[data-k="installers"] .chip__well::before { --g: url("data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 16 16%22 fill=%22none%22 stroke=%22%23000%22 stroke-width=%221.6%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22%3E%3Crect x=%221.5%22 y=%224%22 width=%2213%22 height=%228%22 rx=%222%22/%3E%3Cpath d=%22M1.6 9.2h12.8M11.4 10.7h.01%22/%3E%3C/svg%3E"); }
