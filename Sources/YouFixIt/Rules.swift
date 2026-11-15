@@ -485,17 +485,18 @@ enum Rules {
             let local = group.filter { $0.state == .finishedLocal }
             let unmerged = group.filter { $0.state == .unmerged || $0.state == .unmergedLocal }
             let dirty = group.filter { $0.state == .dirty }
+            func ended(_ items: [DiskScan.Item]) -> Int { items.filter(\.staleLock).count }
             if !finished.isEmpty, sum(finished) >= t.diskMin {
-                know("worktrees-finished:\(project)", Copy.finishedWorktrees(name), Copy.whyFinishedWorktrees(finished.count), "arrow.triangle.branch",
+                know("worktrees-finished:\(project)", Copy.finishedWorktrees(name), Copy.whyFinishedWorktrees(finished.count, ended: ended(finished)), "arrow.triangle.branch",
                      bytes: sum(finished), link: folder("\(project)/.claude/worktrees"), action: .trashAll(targets(finished, .mergedWorktree)),
                      undo: Copy.putBack)
             }
             if !local.isEmpty, sum(local) >= t.diskMin {
-                know("worktrees-local:\(project)", Copy.localWorktrees(name), Copy.whyLocalWorktrees(local.count), "arrow.triangle.branch",
+                know("worktrees-local:\(project)", Copy.localWorktrees(name), Copy.whyLocalWorktrees(local.count, ended: ended(local)), "arrow.triangle.branch",
                      bytes: sum(local), link: folder("\(project)/.claude/worktrees"), action: .trashAll(targets(local, .worktree)), undo: Copy.putBack)
             }
             if !unmerged.isEmpty, sum(unmerged) >= t.diskMin {
-                let why = Copy.whyUnmergedWorktrees(unmerged.count, local: unmerged.contains { $0.state == .unmergedLocal })
+                let why = Copy.whyUnmergedWorktrees(unmerged.count, local: unmerged.contains { $0.state == .unmergedLocal }, ended: ended(unmerged))
                 know("worktrees-unmerged:\(project)", Copy.unmergedWorktrees(name), why, "arrow.triangle.branch",
                      bytes: sum(unmerged), link: folder("\(project)/.claude/worktrees"), action: .trashAll(targets(unmerged, .worktree)), undo: Copy.putBack)
             }
@@ -505,16 +506,23 @@ enum Rules {
             }
         }
 
-        // B8: npx's old downloads; B9: Claude's scratch folders from sessions that ended days ago. One row each.
+        // B8: npx's old downloads; B9: Claude's scratch folders from sessions that ended days ago. One row each. A scratch
+        // folder can hold a git checkout (a worktree on no branch, a clone never pushed) whose work exists nowhere else:
+        // those stay out of the row and are only explained, whatever their size, since what they hold is not space.
         let npx = d.items.filter { $0.kind == .npx && !$0.busy }
         if sum(npx) >= t.diskMin {
             rows.append(Finding(id: "npx", keepKey: "npx", group: .space, name: Copy.npxName, why: Copy.whyNpx(npx.count), bytes: sum(npx),
                                 action: .trashAll(targets(npx, .unused)), undoLabel: Copy.putBack, link: nil, iconPath: nil, symbol: "shippingbox"))
         }
-        let temp = d.items.filter { $0.kind == .claudeTemp && !$0.busy }
+        let temp = d.items.filter { $0.kind == .claudeTemp && !$0.busy && !$0.holdsWork }
         if sum(temp) >= t.diskMin {
             rows.append(Finding(id: "claude-temp", keepKey: "claude-temp", group: .space, name: Copy.claudeTempName, why: Copy.whyClaudeTemp(temp.count),
-                                bytes: sum(temp), action: .trashAll(targets(temp, .written)), undoLabel: Copy.putBack, link: nil, iconPath: nil, symbol: "folder"))
+                                bytes: sum(temp), action: .trashAll(targets(temp, .scratch)), undoLabel: Copy.putBack, link: nil, iconPath: nil, symbol: "folder"))
+        }
+        let work = d.items.filter { $0.kind == .claudeTemp && !$0.busy && $0.holdsWork }
+        if !work.isEmpty {
+            know("scratch-work", Copy.claudeTempWorkName, Copy.whyClaudeTempWork(work.count), "folder", bytes: sum(work),
+                 link: folder(sharedFolder(work.map(\.path))))
         }
 
         if d.unavailableSims > 0 {
@@ -527,6 +535,18 @@ enum Rules {
         }
         // Biggest first, so the rows that matter most lead.
         return rows.sorted { $0.bytes > $1.bytes } + out
+    }
+
+    /// The deepest folder that holds every one of these paths (the path itself when there is one).
+    static func sharedFolder(_ paths: [String]) -> String {
+        guard let first = paths.first else { return "/" }
+        guard paths.count > 1 else { return first }
+        var common = first.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+        for path in paths.dropFirst() {
+            let parts = path.split(separator: "/", omittingEmptySubsequences: true).map(String.init)
+            common = Array(zip(common, parts).prefix { $0 == $1 }.map(\.0))
+        }
+        return "/" + common.joined(separator: "/")
     }
 
     /// The Trash, when only YouFixIt's own record says what is in it (measuring ~/.Trash needs Full Disk Access).

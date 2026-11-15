@@ -158,8 +158,11 @@ enum DiskScanner {
         return out
     }
 
-    /// The worktree's private git folder: its `.git` file reads "gitdir: …".
+    /// The checkout's private git folder: a worktree's `.git` file reads "gitdir: …"; a clone's `.git` is the folder itself.
     nonisolated static func gitdir(_ worktree: String) -> String? {
+        var isDir: ObjCBool = false
+        if FileManager.default.fileExists(atPath: "\(worktree)/.git", isDirectory: &isDir), isDir.boolValue,
+           (try? FileManager.default.destinationOfSymbolicLink(atPath: "\(worktree)/.git")) == nil { return "\(worktree)/.git" }
         guard let text = try? String(contentsOfFile: "\(worktree)/.git", encoding: .utf8),
               let line = text.split(separator: "\n").first, line.hasPrefix("gitdir: ") else { return nil }
         let dir = String(line.dropFirst("gitdir: ".count)).trimmingCharacters(in: .whitespaces)
@@ -213,8 +216,9 @@ enum DiskScanner {
         return found
     }
 
-    /// What lives only in the worktree. Any failure counts as work.
-    nonisolated static func keeps(_ worktree: String, project: String) async -> DiskScan.Keeps {
+    /// What lives only in the worktree, its ignored files compared with the main checkout's (none for a clone). Any failure
+    /// counts as work.
+    nonisolated static func keeps(_ worktree: String, project: String?) async -> DiskScan.Keeps {
         guard let git, let r = await Shell.run(git, ["-C", worktree, "--no-optional-locks", "status", "--porcelain", "-z",
                                                      "--untracked-files=normal", "--ignored", "--ignore-submodules=none"], timeout: 90),
               r.status == 0 else { return .work }
@@ -226,7 +230,7 @@ enum DiskScanner {
         return keeps(r.out, isCopy: { path in
             var isDir: ObjCBool = false
             let mine = "\(worktree)/\(path)"
-            guard fm.fileExists(atPath: mine, isDirectory: &isDir), !isDir.boolValue else { return false }
+            guard let project, fm.fileExists(atPath: mine, isDirectory: &isDir), !isDir.boolValue else { return false }
             return fm.contentsEqual(atPath: mine, andPath: "\(project)/\(path)")
         }, inside: { files(in: "\(worktree)/\($0)", limit: 400) })
     }
@@ -260,12 +264,62 @@ enum DiskScanner {
         return out
     }
 
-    /// git is in the middle of something here (a rebase, a merge, a cherry-pick, a bisect), or the worktree is locked.
+    /// git is in the middle of something here (a rebase, a merge, a cherry-pick, a bisect), or the worktree is locked. A lock
+    /// left by a Claude session that has since ended (`staleLock`) holds nothing back.
     nonisolated static func unfinished(_ worktree: String) -> Bool {
         guard let dir = gitdir(worktree) else { return true }
         let fm = FileManager.default
-        return ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG", "locked"]
-            .contains { fm.fileExists(atPath: "\(dir)/\($0)") }
+        if ["rebase-merge", "rebase-apply", "MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"].contains(where: { fm.fileExists(atPath: "\(dir)/\($0)") }) {
+            return true
+        }
+        return fm.fileExists(atPath: "\(dir)/locked") && !staleLock(worktree)
+    }
+
+    /// The worktree is locked by a Claude session that is gone: its lock names a process that no longer runs, or a process
+    /// with that number that started at another time (the number was reused).
+    nonisolated static func staleLock(_ worktree: String) -> Bool {
+        guard let dir = gitdir(worktree), let reason = try? String(contentsOfFile: "\(dir)/locked", encoding: .utf8) else { return false }
+        return lockStale(reason, process: process)
+    }
+
+    /// Claude Code locks a worktree with the reason "claude session <name> (pid <n> start <date>)" ("claude agent …" for an
+    /// agent's), the date as `LC_ALL=C TZ=UTC ps -o lstart=` prints it, and without it when ps gave none. Any other lock is
+    /// someone's own and stays. A start date that can't be read only lets the lock go once the process is gone.
+    nonisolated static func lockStale(_ reason: String, process: (pid_t) -> (alive: Bool, start: Date?)) -> Bool {
+        guard let lock = claudeLock(reason) else { return false }
+        let now = process(lock.pid)
+        guard now.alive else { return true }
+        guard let then = lock.start, let started = now.start else { return false }
+        return abs(then.timeIntervalSince1970 - started.timeIntervalSince1970.rounded(.down)) >= 1
+    }
+
+    /// The process number and start time in a Claude Code lock reason, or nil when someone else locked it.
+    nonisolated static func claudeLock(_ reason: String) -> (pid: pid_t, start: Date?)? {
+        let text = reason.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let pattern = try? NSRegularExpression(pattern: #"^claude (?:agent|session) .{1,255} \(pid (\d{1,10})(?: start (.{1,255}))?\)$"#),
+              let m = pattern.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let pidRange = Range(m.range(at: 1), in: text), let pid = Int32(text[pidRange]) else { return nil }
+        let start = Range(m.range(at: 2), in: text).flatMap { lstart(String(text[$0])) }
+        return (pid, start)
+    }
+
+    /// "Sat Nov 15 09:12:03 2026" (or "Sun Nov  2 …"), UTC, as `ps -o lstart=` prints it under LC_ALL=C TZ=UTC.
+    nonisolated static func lstart(_ text: String) -> Date? {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "UTC")
+        f.dateFormat = "EEE MMM d HH:mm:ss yyyy"
+        return f.date(from: text.split(separator: " ").joined(separator: " "))
+    }
+
+    /// Whether a process runs, and since when. One of another user's still runs, its start unknown.
+    nonisolated static func process(_ pid: pid_t) -> (alive: Bool, start: Date?) {
+        guard pid > 1 else { return (false, nil) }
+        var bsd = proc_bsdinfo()
+        if proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &bsd, Int32(MemoryLayout<proc_bsdinfo>.size)) > 0 {
+            return (true, Date(timeIntervalSince1970: TimeInterval(bsd.pbi_start_tvsec) + TimeInterval(bsd.pbi_start_tvusec) / 1_000_000))
+        }
+        return (kill(pid, 0) == 0 || errno == EPERM, nil)
     }
 
     /// HEAD is a commit rather than a branch, so its commits may be on no branch at all.
@@ -322,7 +376,7 @@ enum DiskScanner {
                     guard let r = await Shell.run("/usr/bin/du", ["-sk", f.path], timeout: 120), r.status == 0,
                           let kb = UInt64(r.out.split(separator: "\t").first?.trimmingCharacters(in: .whitespaces) ?? "") else { return nil }
                     return DiskScan.Item(kind: .worktree, path: f.path, name: (f.path as NSString).lastPathComponent, bytes: kb << 10,
-                                         modified: gitActivity(f.path), owner: f.project, state: state)
+                                         modified: gitActivity(f.path), owner: f.project, state: state, staleLock: staleLock(f.path))
                 }
             }
             var running = 0
@@ -349,6 +403,73 @@ enum DiskScanner {
         if strict && !isMerged { return Copy.refusedUnmerged }
         if !isMerged && detached(path) { return Copy.refusedChanges }
         return nil
+    }
+
+    // MARK: - Git checkouts in Claude's scratch folders
+
+    /// Every git checkout in a scratch folder: a folder holding a `.git` (a clone's folder, a worktree's file), the folder
+    /// itself included, at most `depth` levels down. Links are not followed, folders that regrow are not entered, nor is a
+    /// checkout once found (git status sees what lives inside it). nil past `limit` entries or when a part can't be read:
+    /// then nobody can vouch for the folder.
+    nonisolated static func checkouts(in folder: String, depth: Int = 5, limit: Int = 50_000) -> [String]? {
+        let fm = FileManager.default
+        if fm.fileExists(atPath: "\(folder)/.git") { return [folder] }
+        guard fm.isReadableFile(atPath: folder), fm.isExecutableFile(atPath: folder), let walker = fm.enumerator(atPath: folder) else { return nil }
+        var out: [String] = []
+        var seen = 0
+        while let rel = walker.nextObject() as? String {
+            seen += 1
+            if seen > limit { return nil }
+            guard let type = walker.fileAttributes?[.type] as? FileAttributeType else { return nil }
+            guard type == .typeDirectory else { continue }
+            let path = "\(folder)/\(rel)"
+            if fm.fileExists(atPath: "\(path)/.git") {
+                out.append(path)
+                walker.skipDescendants()
+            } else if regrows.contains((rel as NSString).lastPathComponent) || walker.level >= depth {
+                walker.skipDescendants()
+            } else if !fm.isReadableFile(atPath: path) || !fm.isExecutableFile(atPath: path) {
+                return nil
+            }
+        }
+        return out
+    }
+
+    /// The main checkout of a linked worktree: the folder that holds the `.git` its gitdir lives in.
+    nonisolated static func mainCheckout(_ worktree: String) -> String? {
+        guard let dir = gitdir(worktree), let r = dir.range(of: "/.git/worktrees/") else { return nil }
+        return String(dir[..<r.lowerBound])
+    }
+
+    /// A clone has commits no remote-tracking ref holds: on a branch, a tag, a stash or HEAD that was never pushed, or
+    /// anything at all when it has no remote. A failure counts as unpushed.
+    nonisolated static func unpushed(_ clone: String) async -> Bool {
+        guard let git, let r = await Shell.run(git, ["-C", clone, "--no-optional-locks", "rev-list", "-n", "1", "--all", "--not", "--remotes"], timeout: 60),
+              r.status == 0 else { return true }
+        return !r.out.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// A git checkout in a scratch folder holds work found nowhere else, judged as strictly as the pre-selected worktree
+    /// row: git mid-operation or locked by a live session, changes, new or local files, and then for a worktree a commit
+    /// that is not on its project's main line (commits on no branch, or on a branch not merged yet), for a clone a commit
+    /// no remote holds.
+    nonisolated static func checkoutHolds(_ checkout: String) async -> Bool {
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: "\(checkout)/.git", isDirectory: &isDir) else { return true }
+        if unfinished(checkout) { return true }
+        let main = isDir.boolValue ? nil : mainCheckout(checkout)
+        if await keeps(checkout, project: main) != .nothing { return true }
+        if isDir.boolValue { return await unpushed(checkout) }
+        return !(await merged(checkout, project: main ?? checkout))
+    }
+
+    /// A Claude scratch folder holds git work that would be lost with it, or can't be looked through.
+    nonisolated static func scratchHolds(_ folder: String) async -> Bool {
+        guard let found = checkouts(in: folder) else { return true }
+        for checkout in found {
+            if await checkoutHolds(checkout) { return true }
+        }
+        return false
     }
 
     /// True when anything inside was written within the window (minutes for caches, days for orphan caches).
@@ -381,6 +502,7 @@ enum DiskScanner {
                         return item
                     case .claudeTemp:
                         item.busy = await recentlyWritten(c.path, days: 3)
+                        if !item.busy { item.holdsWork = await scratchHolds(c.path) }
                         return item
                     default: break
                     }

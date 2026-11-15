@@ -66,17 +66,26 @@ enum Copy {
     static let whyIdleVM = "No containers running, nothing using it"
     static let whyServiceIdle = "Nothing is using it. Stays off until you start it again."
     static func finishedWorktrees(_ project: String) -> String { "Finished worktrees in \(project)" }
-    static func whyFinishedWorktrees(_ n: Int) -> String {
-        "\(n == 1 ? "1 copy" : "\(n) copies") whose work is already merged. \(sessionsNote(n))"
+    static func whyFinishedWorktrees(_ n: Int, ended: Int = 0) -> String {
+        "\(n == 1 ? "1 copy" : "\(n) copies") whose work is already merged. \(sessionsNote(n, ended: ended))"
     }
     /// Moving a worktree takes its folder from any Claude session that used it; the session itself stays in the sidebar.
-    private static func sessionsNote(_ n: Int) -> String {
-        n == 1 ? "A Claude session that used it loses its folder." : "Claude sessions that used them lose their folders."
+    /// Copies locked by a Claude session that has ended say so instead: the lock no longer holds them.
+    private static func sessionsNote(_ n: Int, ended: Int = 0) -> String {
+        if ended > 0 {
+            if ended == n { return n == 1 ? "Its lock is from a Claude session that has ended." : "Their locks are from Claude sessions that have ended." }
+            return ended == 1 ? "1 has a lock from a Claude session that has ended." : "\(ended) have locks from Claude sessions that have ended."
+        }
+        return n == 1 ? "A Claude session that used it loses its folder." : "Claude sessions that used them lose their folders."
     }
     static let npxName = "Old npx downloads"
     static func whyNpx(_ n: Int) -> String { "\(n == 1 ? "1 package" : "\(n) packages") unused for two weeks, npx fetches them again" }
     static let claudeTempName = "Claude scratch folders"
     static func whyClaudeTemp(_ n: Int) -> String { "\(n == 1 ? "1 folder" : "\(n) folders") from sessions that ended days ago" }
+    static let claudeTempWorkName = "Claude scratch folders with git work"
+    static func whyClaudeTempWork(_ n: Int) -> String {
+        "\(n == 1 ? "1 folder holds a git copy" : "\(n) folders hold git copies") with work that may exist nowhere else, like commits on no branch. Look through \(n == 1 ? "it" : "them") first."
+    }
     static func estimate(_ bytes: UInt64) -> String { "about \(Format.size(bytes))" }
     static let keep = "Keep"
     static func keepTip(_ name: String) -> String { "Never suggest \(name)" }
@@ -227,15 +236,15 @@ enum Copy {
     static func appCache(_ app: String) -> String { "\(app) keeps downloaded data here and fetches it again when needed. It can go while \(app) is closed." }
     static func appCacheOpen(_ app: String) -> String { "\(app) keeps downloaded data here and fetches it again when needed. Quit \(app) first to clear it." }
     static func unmergedWorktrees(_ project: String) -> String { "Unmerged worktrees in \(project)" }
-    static func whyUnmergedWorktrees(_ n: Int, local: Bool) -> String {
+    static func whyUnmergedWorktrees(_ n: Int, local: Bool, ended: Int = 0) -> String {
         let copies = n == 1 ? "1 copy" : "\(n) copies"
         let kept = n == 1 ? "its branch keeps" : "their branches keep"
-        return local ? "\(copies) with unmerged commits \(kept), plus local files that go too. \(sessionsNote(n))"
-            : "\(copies) with unmerged commits, which \(kept). \(sessionsNote(n))"
+        return local ? "\(copies) with unmerged commits \(kept), plus local files that go too. \(sessionsNote(n, ended: ended))"
+            : "\(copies) with unmerged commits, which \(kept). \(sessionsNote(n, ended: ended))"
     }
     static func localWorktrees(_ project: String) -> String { "Worktrees with local files in \(project)" }
-    static func whyLocalWorktrees(_ n: Int) -> String {
-        "\(n == 1 ? "1 merged copy" : "\(n) merged copies") holding local files like .env, which go to the Trash with \(n == 1 ? "it" : "them"). \(sessionsNote(n))"
+    static func whyLocalWorktrees(_ n: Int, ended: Int = 0) -> String {
+        "\(n == 1 ? "1 merged copy" : "\(n) merged copies") holding local files like .env, which go to the Trash with \(n == 1 ? "it" : "them"). \(sessionsNote(n, ended: ended))"
     }
     static func dirtyWorktrees(_ project: String) -> String { "Worktrees with unsaved work in \(project)" }
     static func whyDirtyWorktrees(_ n: Int) -> String {

@@ -362,10 +362,16 @@ enum Fixtures {
     static let project = "/Users/me/Ai Projects/Real Woo AI"
     static let worktrees = "\(project)/.claude/worktrees"
 
-    /// Every newer disk kind: worktrees in each state, npx, Claude's scratch folders, a big app cache, an old simulator.
+    /// Claude's scratch folders for Real Woo AI sessions, as /private/tmp/claude-501 names them.
+    static let scratch = "/private/tmp/claude-501/-Users-me-Ai-Projects-Real-Woo-AI"
+
+    /// Every newer disk kind: worktrees in each state, npx, Claude's scratch folders (two holding git work only there, as on
+    /// 2026-11-15: a worktree with commits on no branch and review copies with uncommitted tests), a big app cache, an old simulator.
     static var diskMore: DiskScan {
-        func item(_ kind: DiskScan.Kind, _ path: String, _ mb: UInt64, busy: Bool = false, owner: String? = nil, state: DiskScan.Worktree? = nil) -> DiskScan.Item {
-            DiskScan.Item(kind: kind, path: path, name: (path as NSString).lastPathComponent, bytes: mb << 20, modified: nil, busy: busy, owner: owner, state: state)
+        func item(_ kind: DiskScan.Kind, _ path: String, _ mb: UInt64, busy: Bool = false, owner: String? = nil, state: DiskScan.Worktree? = nil,
+                  holdsWork: Bool = false) -> DiskScan.Item {
+            DiskScan.Item(kind: kind, path: path, name: (path as NSString).lastPathComponent, bytes: mb << 20, modified: nil, busy: busy, owner: owner, state: state,
+                          holdsWork: holdsWork)
         }
         return DiskScan(at: now, items: [
             item(.worktree, "\(worktrees)/agent-a1", 900, owner: project, state: .finished),
@@ -379,10 +385,23 @@ enum Fixtures {
             item(.npx, "/Users/me/.npm/_npx/2c3d", 300),
             item(.npx, "/Users/me/.npm/_npx/4e5f", 900, busy: true),
             item(.claudeTemp, "/private/tmp/claude-501/-Users-me-Saves/s1", 700),
+            item(.claudeTemp, "\(scratch)/0c1e-k13", 300, holdsWork: true),
+            item(.claudeTemp, "\(scratch)/7f2a-rv", 120, holdsWork: true),
+            item(.claudeTemp, "\(scratch)/9d4b-live", 200, busy: true, holdsWork: true),
             DiskScan.Item(kind: .appCache, path: "/Users/me/Library/Caches/com.spotify.client", name: "Spotify", bytes: 4700 << 20, modified: nil, owner: "com.spotify.client"),
             DiskScan.Item(kind: .runtime, path: "com.apple.CoreSimulator.SimRuntime.iOS-17-5", name: "iOS 17.5", bytes: 7 << 30, modified: nil),
             DiskScan.Item(kind: .oldDevice, path: "0F2C9A51-OLD", name: "iPhone 12", bytes: 2 << 30, modified: nil),
         ], unavailableSims: 0, freeBytes: 255 << 30, totalBytes: 926 << 30)
+    }
+
+    /// Worktrees whose Claude Code lock outlived its session: one of two finished copies, and the one unmerged copy.
+    static var diskStaleLocks: DiskScan {
+        func item(_ name: String, _ state: DiskScan.Worktree, stale: Bool) -> DiskScan.Item {
+            DiskScan.Item(kind: .worktree, path: "\(worktrees)/\(name)", name: name, bytes: 600 << 20, modified: nil, owner: project, state: state, staleLock: stale)
+        }
+        return DiskScan(at: now, items: [item("agent-a1", .finished, stale: true), item("agent-a2", .finished, stale: false),
+                                         item("brand-b1", .unmergedLocal, stale: true)],
+                        unavailableSims: 0, freeBytes: 255 << 30, totalBytes: 926 << 30)
     }
 
     /// The same disk while something writes into the Xcode build cache.
@@ -422,6 +441,11 @@ enum Fixtures {
 /// Carries one Shell.run result out of a detached task for the self-test.
 final class ShellBox: @unchecked Sendable {
     var result: Shell.Result?
+}
+
+/// Carries any answer out of a detached task for the self-test.
+final class AnswerBox<T>: @unchecked Sendable {
+    var value: T?
 }
 
 @MainActor
@@ -814,6 +838,98 @@ func runSelfTest() {
         check(false, "old npx downloads are one row")
     }
     check(row(more, "claude-temp")?.actionable == true, "Claude's old scratch folders are one row")
+    if case .trashAll(let targets) = row(more, "claude-temp")?.action {
+        check(targets.map(\.path) == ["/private/tmp/claude-501/-Users-me-Saves/s1"] && targets.allSatisfy { $0.check == .scratch } && row(more, "claude-temp")?.bytes == 700 << 20,
+              "scratch folders holding git work are left out of the row, and each is checked again when pressed: \(targets.map(\.path))")
+    } else {
+        check(false, "scratch folders holding git work are left out of the row")
+    }
+    let scratchWork = row(more, "know:scratch-work")
+    check(scratchWork?.action == nil && scratchWork?.actionable == false && scratchWork?.bytes == 420 << 20 && scratchWork?.why.hasPrefix("2 folders hold git copies") == true
+          && scratchWork?.link?.url == Fixtures.scratch && scratchWork?.link?.title == Copy.showFolder,
+          "they are explained in Good to know, the busy one left out, with Show in Finder on the folder they share: \(scratchWork?.why ?? "")")
+    check(row(ids(Fixtures.simIdle, disk: Fixtures.disk), "know:scratch-work") == nil, "no scratch folder with git work, no row")
+    check(Rules.sharedFolder(["/a/b/c", "/a/b/d/e"]) == "/a/b" && Rules.sharedFolder(["/a/b/c"]) == "/a/b/c" && Rules.sharedFolder(["/a/x", "/b/y"]) == "/",
+          "the folder scratch folders share is the deepest that holds them all")
+
+    print("scratch folders with git")
+    let lockFile = "claude session k13 (pid 4242 start Sat Nov 15 09:12:03 2026)"
+    let lockStart = Date(timeIntervalSince1970: 1_794_733_923)      // 2026-11-15 09:12:03 UTC
+    check(DiskScanner.claudeLock(lockFile)?.pid == 4242 && DiskScanner.claudeLock(lockFile)?.start == lockStart
+          && DiskScanner.claudeLock("claude agent agent-a1 (pid 77 start Sun Nov  2 08:00:00 2026)\n")?.start == DiskScanner.lstart("Sun Nov 2 08:00:00 2026")
+          && DiskScanner.claudeLock("claude session k13 (pid 4242)")?.start == nil && DiskScanner.claudeLock("claude session k13 (pid 4242)")?.pid == 4242,
+          "Claude Code's lock reason gives its process and start, a padded day and no start included")
+    check(DiskScanner.claudeLock("") == nil && DiskScanner.claudeLock("moving to a USB disk") == nil && DiskScanner.claudeLock("claude session k13") == nil,
+          "a lock anyone else wrote is not Claude's")
+    func stale(_ reason: String, _ now: (alive: Bool, start: Date?)) -> Bool { DiskScanner.lockStale(reason, process: { _ in now }) }
+    check(stale(lockFile, (false, nil)) && stale("claude session k13 (pid 4242)", (false, nil)),
+          "a lock whose session no longer runs holds nothing back")
+    check(stale(lockFile, (true, lockStart.addingTimeInterval(3600))), "nor one whose process number now belongs to a later process")
+    check(!stale(lockFile, (true, lockStart.addingTimeInterval(0.4))) && !stale("claude session k13 (pid 4242)", (true, Date())) && !stale(lockFile, (true, nil))
+          && !stale("claude session k13 (pid 4242 start someday)", (true, Date())),
+          "a live session's lock stays, also when its start can't be told apart")
+    check(!stale("moving to a USB disk", (false, nil)) && !stale("", (false, nil)), "someone's own lock always stays")
+    let stales = ids(Fixtures.quiet, disk: Fixtures.diskStaleLocks)
+    check(row(stales, "know:worktrees-finished:")?.why == "2 copies whose work is already merged. 1 has a lock from a Claude session that has ended."
+          && row(stales, "know:worktrees-unmerged:")?.why.hasSuffix("Its lock is from a Claude session that has ended.") == true
+          && offers(stales, "know:worktrees-finished:") && offers(stales, "know:worktrees-unmerged:"),
+          "worktrees a stale lock held get their button and say why: \(row(stales, "know:worktrees-finished:")?.why ?? "")")
+
+    // A real scratch area, built with git: what is found, and what each checkout holds.
+    if let git = DiskScanner.git {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("youfixit-scratch-\(getpid())").path
+        try? FileManager.default.removeItem(atPath: root)
+        try? FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: true)
+        let script = """
+            set -e
+            g() { "$GIT" -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false -c core.hooksPath=/dev/null "$@"; }
+            cd "$ROOT"
+            g init -q --bare -b main origin.git
+            g init -q -b main seed && echo a > seed/a.txt && g -C seed add a.txt && g -C seed commit -qm a
+            g -C seed remote add origin "$ROOT/origin.git" && g -C seed push -q origin main && g -C seed fetch -q origin
+            mkdir -p s1/scratchpad s2/scratchpad/rv s3/scratchpad s4/scratchpad s5/notes s6/scratchpad s7/scratchpad s8/scratchpad
+            g clone -q origin.git s1/scratchpad/clean
+            g clone -q origin.git s2/scratchpad/rv/ahead && echo b > s2/scratchpad/rv/ahead/b.txt && g -C s2/scratchpad/rv/ahead add b.txt && g -C s2/scratchpad/rv/ahead commit -qm b
+            g -C seed worktree add -q --detach "$ROOT/s3/scratchpad/k13" && echo c > s3/scratchpad/k13/c.txt && g -C s3/scratchpad/k13 add c.txt && g -C s3/scratchpad/k13 commit -qm c
+            g -C seed worktree add -q --detach "$ROOT/s4/scratchpad/merged"
+            echo hi > s5/notes/n.md && mkdir -p s5/node_modules/x && g init -q s5/node_modules/x
+            g -C seed worktree add -q --detach "$ROOT/s6/scratchpad/gone"
+            g -C seed worktree lock --reason "claude session k9 (pid 99999999 start Sat Nov 15 09:12:03 2026)" "$ROOT/s6/scratchpad/gone"
+            g -C seed worktree add -q --detach "$ROOT/s7/scratchpad/live"
+            g -C seed worktree lock --reason "claude session k8 (pid $PPID start $(LC_ALL=C TZ=UTC ps -o lstart= -p $PPID))" "$ROOT/s7/scratchpad/live"
+            g -C seed worktree add -q --detach "$ROOT/s8/scratchpad/rv" && echo t > s8/scratchpad/rv/new.test.ts
+            """
+        let setup = Process()
+        setup.executableURL = URL(fileURLWithPath: "/bin/sh")
+        setup.arguments = ["-c", script]
+        setup.environment = ["ROOT": root, "GIT": git, "PATH": "/usr/bin:/bin", "HOME": root, "GIT_CONFIG_NOSYSTEM": "1"]
+        setup.standardOutput = FileHandle.nullDevice
+        try? setup.run()
+        setup.waitUntilExit()
+        check(setup.terminationStatus == 0, "the git scratch area is set up")
+        func holds(_ folder: String) -> Bool {
+            let done = DispatchSemaphore(value: 0)
+            let box = AnswerBox<Bool>()
+            Task.detached { box.value = await DiskScanner.scratchHolds("\(root)/\(folder)"); done.signal() }
+            done.wait()
+            return box.value ?? false
+        }
+        check(DiskScanner.checkouts(in: "\(root)/s2")?.map { $0.replacingOccurrences(of: root, with: "") } == ["/s2/scratchpad/rv/ahead"]
+              && DiskScanner.checkouts(in: "\(root)/s5") == [] && DiskScanner.checkouts(in: "\(root)/s1/scratchpad/clean") == ["\(root)/s1/scratchpad/clean"],
+              "the walk finds checkouts deep in a scratch folder, not inside folders that regrow")
+        check(DiskScanner.checkouts(in: "\(root)/s2", depth: 2) == [], "and only so many levels down")
+        check(!holds("s1") && !holds("s4") && !holds("s5"), "a pushed clone, a merged worktree and a folder without git hold nothing")
+        check(holds("s2"), "a clone with a commit no remote has holds work")
+        check(holds("s3"), "a worktree with commits on no branch holds work")
+        check(holds("s8"), "a worktree with an uncommitted test file holds work")
+        check(DiskScanner.staleLock("\(root)/s6/scratchpad/gone") && !DiskScanner.unfinished("\(root)/s6/scratchpad/gone") && !holds("s6"),
+              "a worktree locked by a session that has ended is judged as if unlocked")
+        check(!DiskScanner.staleLock("\(root)/s7/scratchpad/live") && DiskScanner.unfinished("\(root)/s7/scratchpad/live") && holds("s7"),
+              "one locked by a session that still runs stays held")
+        try? FileManager.default.removeItem(atPath: root)
+    } else {
+        print("  skip git scratch checks: no git on this Mac")
+    }
     check(offers(more, "know:appcache:com.spotify.client"), "a big app cache is offered while the app is closed")
     let spotify = ids(Fixtures.simIdle, disk: Fixtures.diskMore) { _, s in
         s.procs.append(Fixtures.proc(4800, 1, "Spotify", path: "/Applications/Spotify.app/Contents/MacOS/Spotify", ago: 9000, mb: 400))
@@ -833,7 +949,7 @@ func runSelfTest() {
     let withButton = ["know:claude", "know:menubar:", "know:busy:", "know:db:", "know:awake:", "know:cache:", "know:appcache:", "know:trash",
                       "know:runtime:", "know:device:", "know:worktrees-finished:", "know:worktrees-unmerged:", "know:worktrees-local:",
                       "know:leftover"]
-    let explainOnly = ["know:tabs:", "know:spotlight", "know:memory", "know:backlog", "know:worktrees-dirty:"]
+    let explainOnly = ["know:tabs:", "know:spotlight", "know:memory", "know:backlog", "know:worktrees-dirty:", "know:scratch-work"]
     for prefix in withButton {
         let rows = everything.filter { $0.id.hasPrefix(prefix) }
         check(!rows.isEmpty && rows.allSatisfy(\.offer), "\(prefix) rows have a button (\(rows.count))")

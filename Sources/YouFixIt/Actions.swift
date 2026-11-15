@@ -253,6 +253,10 @@ enum Actions {
             return await DiskScanner.worktreeHold(t.path, using: usage, strict: true)
         case .unused:
             return DiskScanner.inUse(t.path, by: usage) ? Copy.refusedInUse : nil
+        case .scratch:
+            if DiskScanner.inUse(t.path, by: usage) { return Copy.refusedInUse }
+            if await DiskScanner.recentlyWritten(t.path, minutes: 10) { return Copy.refusedBusy }
+            return await DiskScanner.scratchHolds(t.path) ? Copy.refusedChanges : nil
         }
     }
 

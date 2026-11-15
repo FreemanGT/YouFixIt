@@ -151,6 +151,7 @@ struct Finding: Identifiable, Sendable, Equatable {
             case worktree         // a pressed worktree button: quiet a day, nothing inside, no work only there, commits kept
             case mergedWorktree   // the pre-selected row: the same, nothing at all only there, and its work still merged
             case unused     // nothing running from it (npx packages)
+            case scratch    // a Claude scratch folder: as .written, and no git checkout inside holds work found nowhere else
         }
         let path: String
         let bytes: UInt64
@@ -236,6 +237,8 @@ struct DiskScan: Sendable {
         var busy = false    // something wrote inside it recently (10 min for caches, 30 days for orphan caches)
         var owner: String? = nil        // worktrees: the project folder; app caches: the app's bundle id
         var state: Worktree? = nil      // worktrees only
+        var staleLock = false           // worktrees: locked by a Claude session that has ended, so the lock holds nothing back
+        var holdsWork = false           // Claude scratch folders: a git checkout inside holds work found nowhere else
     }
     let at: Date
     let items: [Item]
