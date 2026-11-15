@@ -14,7 +14,7 @@ enum Rules {
     static let leftoverNames: Set<String> = ["node", "bun", "deno", "php", "python", "python3", "ruby", "java"]
     static let chromeFamily: Set<String> = [
         "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary", "com.brave.Browser",
-        "com.microsoft.edgemac", "company.thebrowser.Browser", "org.chromium.Chromium",
+        "com.microsoft.edgemac", "company.thebrowser.Browser", "org.chromium.Chromium", "at.studio.AsideBrowser",
     ]
     static let tempProfileDirs = ["/private/tmp/", "/tmp/", "/var/folders/", "/private/var/folders/"]
     /// Virtual machine apps that may be quit when their Docker socket says nothing runs inside.
@@ -59,21 +59,29 @@ enum Rules {
         if let disk { out += space(disk, s, tuning) }
         out += trashLedger(disk, trashed: trashed)
         // A process with a row already is not explained a second time.
-        let covered = Set(out.flatMap { f -> [pid_t] in
-            switch f.action {
-            case .sigterm(let pid, _), .stopService(_, let pid, _), .quitApp(let pid, _, _): [pid]
-            case .sigtermAll(let targets): targets.map(\.pid)
-            default: []
-            }
-        })
-        out += insights(s, history, tuning, covered: covered)
+        out += insights(s, history, tuning, covered: covered(out))
+        if let m = memory(s, history, keep: keep, tuning, covered: covered(out)) { out.append(m) }
         let kept = out.filter { !keep.contains($0.keepKey) }
-        // Good to know reads biggest first. 100 MB buckets keep rows from swapping places as memory wobbles between samples.
+        // Good to know reads biggest first, after Memory, which sums up the rest. 100 MB buckets keep rows from swapping
+        // places as memory wobbles between samples.
         let know = kept.filter { $0.group == .know }.sorted { a, b in
+            if (a.id == "know:memory") != (b.id == "know:memory") { return a.id == "know:memory" }
             let (x, y) = (a.bytes / (100 << 20), b.bytes / (100 << 20))
             return x != y ? x > y : a.id < b.id
         }
         return kept.filter { $0.group != .know } + know
+    }
+
+    /// The processes these rows' buttons would reach.
+    static func covered(_ rows: [Finding]) -> Set<pid_t> {
+        Set(rows.flatMap { f -> [pid_t] in
+            switch f.action {
+            case .sigterm(let pid, _), .stopService(_, let pid, _), .quitApp(let pid, _, _): [pid]
+            case .sigtermAll(let targets): targets.map(\.pid)
+            case .quitApps(let targets): targets.map(\.pid)
+            default: []
+            }
+        })
     }
 
     // MARK: - Windows over the history
@@ -661,9 +669,6 @@ enum Rules {
             covered.insert(p.pid)
         }
 
-        if held(h, 60, { $0.pressure >= 2 }) || s.compressed >= s.memTotal / 4 || s.swapUsed >= 2 << 30 {
-            know("memory", "Memory", Copy.memorySqueeze, "memorychip")
-        }
         if held(h, t.sustain, { $0.load1 / Double(max(1, $0.cores)) > 2 && $0.cpuBusy < 0.6 }) {
             know("backlog", "Waiting programs", Copy.backlog, "hourglass")
         }
@@ -729,6 +734,54 @@ enum Rules {
                  action: hasTempProfile(args) ? .sigterm(pid: p.pid, start: p.start) : nil)
         }
         return out
+    }
+
+    /// Memory is short: pressure held for a minute, a quarter of it compressed, or 2 GB swapped out.
+    static func squeezed(_ s: Sample, _ h: [Sample]) -> Bool {
+        held(h, 60, { $0.pressure >= 2 }) || s.compressed >= s.memTotal / 4 || s.swapUsed >= 2 << 30
+    }
+
+    /// G18: memory, in the number memory meters show (Activity Monitor's "Memory Used") and what it means. Said once half
+    /// of it is in use, or as soon as it runs short. Names the apps that hold the most, each with everything it started
+    /// (Chrome's tabs, Claude's sessions). Its button quits the Dock apps nobody has touched for the idle window and that
+    /// sit quiet: never an app you rely on, the one in front, one with a dialog or one playing sound. `covered` holds the
+    /// processes another row already reaches.
+    static func memory(_ s: Sample, _ h: [Sample], keep: Set<String>, _ t: Tuning, covered: Set<pid_t>) -> Finding? {
+        let short = squeezed(s, h)
+        guard short || s.memUsed >= s.memTotal / 2 else { return nil }
+        var quit: [Finding.AppTarget] = []
+        if spans(h, t.idle) {
+            for app in s.apps.sorted(by: { $0.pid < $1.pid }) where app.regular && !app.bundleID.isEmpty && !covered.contains(app.pid) {
+                guard let p = s.procs[app.pid], Safety.refusal(p, app: app, in: s, history: h, keep: keep, tuning: t, strict: false) == nil,
+                      let last = app.lastActivated, s.at.timeIntervalSince(last) >= t.idle else { continue }
+                let bytes = s.footprint(of: app.pid)
+                guard bytes >= t.appMin, avgCPU(app.pid, h, t.idle) < 0.05, maxCPU(app.pid, h, 60) < 0.5,
+                      ioRate(app.pid, h, t.idle) < t.busyIO else { continue }
+                quit.append(Finding.AppTarget(pid: app.pid, bundleID: app.bundleID, url: app.url, name: app.name, bytes: bytes))
+            }
+        }
+        quit.sort { $0.bytes != $1.bytes ? $0.bytes > $1.bytes : $0.name < $1.name }
+        // Two names make room for the idle ones; the button's size says what quitting them frees.
+        let why = Copy.memory(used: s.memUsed, total: s.memTotal, short: short, holders: holders(s, top: quit.isEmpty ? 3 : 2), idle: quit.map(\.name))
+        return Finding(id: "know:memory", keepKey: "know:memory", group: .know, name: "Memory", why: why, bytes: quit.reduce(0) { $0 + $1.bytes },
+                       action: quit.isEmpty ? nil : .quitApps(quit), undoLabel: quit.isEmpty ? nil : Copy.reopen, link: activityMonitor,
+                       iconPath: nil, symbol: "memorychip")
+    }
+
+    /// The apps holding the most memory, biggest first: each app with everything it started, an app started by another
+    /// app counted under that one. Only ones worth naming.
+    static func holders(_ s: Sample, top: Int = 3) -> [(name: String, bytes: UInt64)] {
+        let pids = Set(s.apps.map(\.pid))
+        var by: [String: UInt64] = [:]
+        for app in s.apps where !app.bundleID.isEmpty && app.pid != ProcessInfo.processInfo.processIdentifier {
+            var parent = s.procs[app.pid]?.ppid ?? 1
+            var steps = 0
+            while parent > 1, !pids.contains(parent), let up = s.procs[parent], steps < 64 { parent = up.ppid; steps += 1 }
+            guard parent <= 1 || !pids.contains(parent) else { continue }
+            by[app.name, default: 0] += s.footprint(of: app.pid)
+        }
+        return by.filter { $0.value >= 300 << 20 }.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }
+            .prefix(top).map { (name: $0.key, bytes: $0.value) }
     }
 }
 

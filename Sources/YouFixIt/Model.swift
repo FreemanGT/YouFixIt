@@ -144,6 +144,15 @@ struct Finding: Identifiable, Sendable, Equatable {
         var bytes: UInt64 = 0
     }
 
+    /// One app to quit the normal way, and what it holds.
+    struct AppTarget: Sendable, Equatable {
+        let pid: pid_t
+        let bundleID: String
+        let url: URL?
+        let name: String
+        let bytes: UInt64
+    }
+
     /// One folder to move to the Trash, what it holds, and what to re-check right before it moves.
     struct TrashTarget: Sendable, Equatable {
         enum Check: Sendable, Equatable {
@@ -161,6 +170,7 @@ struct Finding: Identifiable, Sendable, Equatable {
     enum Action: Sendable, Equatable {
         case shutdownSim(udid: String)
         case quitApp(pid: pid_t, bundleID: String, url: URL?)
+        case quitApps([AppTarget])
         case sigterm(pid: pid_t, start: Date)
         case sigtermAll([Target])
         case endSessions([Target])

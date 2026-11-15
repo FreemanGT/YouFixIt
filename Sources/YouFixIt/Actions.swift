@@ -27,6 +27,28 @@ enum Actions {
         case .quitApp(let pid, let bundleID, let url):
             let (o, undo) = await quit(pid: pid, bundleID: bundleID, url: url, name: f.name, history: history, keep: keep, tuning: tuning, strict: !explicit)
             return ActResult(outcome: o, undo: undo.map { [$0] } ?? [], freed: o == .done ? f.bytes : 0)
+        case .quitApps(let apps):
+            var result = ActResult(outcome: .done)
+            var outcomes: [Outcome] = []
+            for a in apps {
+                // Someone may have gone back to it since the row was made.
+                if let last = history.last?.app(a.pid)?.lastActivated, Date().timeIntervalSince(last) < tuning.idle {
+                    outcomes.append(.refused(Copy.refusedInUse))
+                    continue
+                }
+                let (o, undo) = await quit(pid: a.pid, bundleID: a.bundleID, url: a.url, name: a.name, history: history, keep: keep, tuning: tuning,
+                                           strict: !explicit)
+                // The row is "Memory", so what held an app back is told in that app's name.
+                switch o {
+                case .askedToSave: outcomes.append(.refused(Copy.askedToSave(Copy.appName(a.name))))
+                case .stillRunning: outcomes.append(.refused(Copy.stayedOpen(Copy.appName(a.name))))
+                default: outcomes.append(o)
+                }
+                if o == .done { result.freed += a.bytes }
+                if let undo { result.undo.append(undo) }
+            }
+            result.outcome = merge(outcomes)
+            return result
         case .shutdownSim(let udid):
             let gui = NSWorkspace.shared.runningApplications.contains { Rules.simGUIBundles.contains($0.bundleIdentifier ?? "") && !$0.isHidden }
             guard let r = await Shell.run("/usr/bin/xcrun", ["simctl", "shutdown", udid], timeout: 20), r.status == 0 else {

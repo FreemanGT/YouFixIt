@@ -117,6 +117,7 @@ enum Copy {
     static func verb(_ action: Finding.Action) -> String {
         switch action {
         case .quitApp: "Quit"
+        case .quitApps(let apps): apps.count == 1 ? "Quit \(appName(apps[0].name))" : "Quit \(apps.count) idle apps"
         case .shutdownSim: "Shut down"
         case .sigterm, .sigtermAll, .stopService: "Stop"
         case .endSessions: "Close quiet ones"
@@ -140,6 +141,7 @@ enum Copy {
         let tail = freed > 0 ? ", freed \(Format.size(freed))." : "."
         switch action {
         case .quitApp: return "Quit \(name)\(tail)"
+        case .quitApps(let apps): return apps.count == 1 ? "Quit \(appName(apps[0].name))\(tail)" : "Quit the idle apps\(tail)"
         case .shutdownSim, .sigterm, .sigtermAll, .stopService: return "Stopped \(name)\(tail)"
         case .endSessions: return "Closed the quiet sessions\(tail)"
         case .trash, .trashAll: return "Moved \(name) to the Trash."
@@ -200,7 +202,32 @@ enum Copy {
     static let activityMonitorLink = "Open Activity Monitor"
     static let serviceConnected = "Running from Homebrew, and something is connected to it right now."
     static let serviceBusy = "Running from Homebrew, and busy right now."
-    static let memorySqueeze = "Memory is nearly full, so your Mac is juggling. Letting go of the things above helps right away."
+    /// "31 GB of 48 GB in use, which is normal: your Mac isn't short of memory. Biggest: Chrome Beta 5.8 GB, Aside 5 GB, Claude 4.6 GB."
+    /// `idle` names the apps the row's button quits.
+    static func memory(used: UInt64, total: UInt64, short: Bool, holders: [(name: String, bytes: UInt64)], idle: [String]) -> String {
+        var text = short
+            ? "\(Format.size(used)) of \(Format.size(total)) in use. Memory is running short, so your Mac is juggling."
+            : "\(Format.size(used)) of \(Format.size(total)) in use, which is normal: your Mac isn't short of memory."
+        if !holders.isEmpty {
+            // A size never breaks across lines ("8.4" here, "GB" on the next).
+            text += " Biggest: " + holders.map { "\(appName($0.name)) \(Format.size($0.bytes).replacingOccurrences(of: " ", with: "\u{00A0}"))" }
+                .joined(separator: ", ") + "."
+        }
+        if !idle.isEmpty {
+            text += " Idle: \(list(idle.count > 3 ? idle.prefix(2).map(appName) + ["\(idle.count - 2) more"] : idle.map(appName)))."
+        }
+        return text
+    }
+    /// An app as a sentence names it: without the brand word, and without the invisible marks some names carry (WhatsApp's).
+    static func appName(_ name: String) -> String {
+        let shown = String(String.UnicodeScalarView(name.unicodeScalars.filter { $0.properties.generalCategory != .format }))
+        return shown.replacingOccurrences(of: "Google ", with: "").trimmingCharacters(in: .whitespaces)
+    }
+    /// "A", "A and B", "A, B and C".
+    static func list(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " and " + items[items.count - 1]
+    }
     static let backlog = "Lots of programs are waiting their turn. Closing idle ones clears the queue."
     static let drawing = "Drawing all those windows is hard work. Fewer open windows means a smoother Mac."
     static let warm = "Your Mac is running warm. That's normal while it works hard, it cools down when things settle."
@@ -280,6 +307,8 @@ enum Copy {
         switch action {
         case nil: "It has no button. YouFixIt only explains it."
         case .quitApp: "Its button quits the app the normal way. It can be opened again."
+        case .quitApps(let apps): apps.count == 1 ? "Its button quits \(appName(apps[0].name)) the normal way. It can be opened again."
+            : "Its button quits \(list(apps.map { appName($0.name) })) the normal way, so each can ask to save. They can be opened again."
         case .shutdownSim: "Its button shuts the simulator down. It can be started again."
         case .sigterm: "Its button asks the program to stop."
         case .sigtermAll(let targets): targets.count == 1 ? "Its button asks the program to stop." : "Its button asks each of these programs to stop."

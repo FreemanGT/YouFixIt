@@ -28,6 +28,8 @@ enum Snapshot {
         Scene(name: "know-confirm", mock: "offers", knowOpen: true, confirm: "know:trash"),
         Scene(name: "know-undo", mock: "offers", knowOpen: true, act: "know:menubar:com.raycast.macos"),
         Scene(name: "busy", mock: "busyProgram", knowOpen: true),
+        Scene(name: "memory", mock: "memory", knowOpen: true),
+        Scene(name: "memory-undo", mock: "memory", knowOpen: true, act: "know:memory"),
         Scene(name: "hover-ask", mock: "heavy", knowOpen: true, hover: true),
         Scene(name: "hover-know", mock: "offers", knowOpen: true, hover: true),
         Scene(name: "worktrees", mock: "worktrees", knowOpen: true),

@@ -79,6 +79,10 @@ enum Ask {
         switch f.action {
         case .quitApp(_, let bundleID, let url):
             return [Copy.askApp(bundleID, path: url.map { Redact.tilde($0.path, home: home) })]
+        case .quitApps(let apps):
+            let n = brief ? 3 : 6
+            let shown = apps.prefix(n).map { Copy.askApp($0.bundleID, path: $0.url.map { Redact.tilde($0.path, home: home) }) }
+            return shown + (apps.count > n ? [Copy.askAndMore(apps.count - n)] : [])
         case .sigterm(let pid, _), .stopService(_, let pid, _):
             return program(pid, sample: sample, home: home, brief: brief)
         case .sigtermAll(let targets), .endSessions(let targets):

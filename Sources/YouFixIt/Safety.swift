@@ -13,7 +13,7 @@ enum Safety {
         "com.exafunction.windsurf", "com.apple.dt.Xcode", "com.google.android.studio", "com.anthropic.claudefordesktop",
         // Browsers: tabs are unsaved state
         "com.apple.Safari", "com.google.Chrome", "com.google.Chrome.beta", "com.google.Chrome.canary",
-        "company.thebrowser.Browser", "org.mozilla.firefox", "com.brave.Browser", "com.microsoft.edgemac",
+        "company.thebrowser.Browser", "org.mozilla.firefox", "com.brave.Browser", "com.microsoft.edgemac", "at.studio.AsideBrowser",
         // Messages, mail and calls
         "com.apple.MobileSMS", "com.apple.mail", "com.microsoft.Outlook", "net.whatsapp.WhatsApp", "ru.keepcoder.Telegram",
         "com.tdesktop.Telegram", "com.hnc.Discord", "org.whispersystems.signal-desktop", "com.skype.skype", "Cisco-Systems.Spark",

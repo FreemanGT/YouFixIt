@@ -23,7 +23,7 @@ enum Fixtures {
         var pressure = 1
         var load1 = 3.0
         var cpuBusy = 0.2
-        var memUsed: UInt64 = 30 << 30
+        var memUsed: UInt64 = 20 << 30      // under half, so the Memory row has nothing to say unless a fixture sets it
         var compressed: UInt64 = 4 << 30
         var swap: UInt64 = 0
         var thermal = 0
@@ -150,6 +150,27 @@ enum Fixtures {
         var s = quiet
         s.procs += (0..<9).map { proc(60_000 + pid_t($0), 2646, "claude", path: "/Users/me/Library/Application Support/Claude/claude-code/2.1.289/x/claude.app/Contents/MacOS/claude", ago: 18_000, mb: 500) }
         s.cwd = [60_000: "/Users/me/Saves", 60_001: "/Users/me/Saves", 60_002: "/Users/me/Ai Projects/YouFixIT"]
+        return s
+    }
+
+    /// Today's Mac at 31 of 48 GB: two browsers full of tabs, Claude with its sessions, Spotify playing, WhatsApp, Figma left
+    /// in the background for 25 minutes and Notion used 5 minutes ago. Only Figma is the Memory button's.
+    static var memoryNormal: Spec {
+        var s = claude9
+        s.memUsed = 31 << 30
+        s.procs += chrome40.procs.filter { $0.pid >= 5000 && $0.pid < 5200 }
+        s.apps += chrome40.apps.filter { $0.pid == 5000 }
+        s.procs.append(proc(5500, 1, "Aside", path: "/Applications/Aside.app/Contents/MacOS/Aside", ago: 20_000, mb: 500))
+        s.procs += (0..<12).map { proc(5600 + pid_t($0), 5500, "Aside Helper (Renderer)", path: "/Applications/Aside.app/Contents/Frameworks/x/Aside Helper (Renderer)", ago: 15_000, mb: 300) }
+        s.apps.append(app(5500, "at.studio.AsideBrowser", "Aside", windows: 1))
+        s.procs.append(proc(5700, 1, "Spotify", path: "/Applications/Spotify.app/Contents/MacOS/Spotify", ago: 20_000, mb: 900))
+        s.apps.append(app(5700, "com.spotify.client", "Spotify", activatedAgo: 4000, windows: 1, audio: true))
+        s.procs.append(proc(5800, 1, "WhatsApp", path: "/Applications/WhatsApp.app/Contents/MacOS/WhatsApp", ago: 20_000, mb: 600))
+        s.apps.append(app(5800, "net.whatsapp.WhatsApp", "\u{200E}WhatsApp", activatedAgo: 4000, windows: 1))
+        s.procs.append(proc(5900, 1, "Figma", path: "/Applications/Figma.app/Contents/MacOS/Figma", ago: 9000, mb: 900))
+        s.apps.append(app(5900, "com.figma.Desktop", "Figma", activatedAgo: 1500, windows: 2))
+        s.procs.append(proc(5950, 1, "Notion", path: "/Applications/Notion.app/Contents/MacOS/Notion", ago: 9000, mb: 600))
+        s.apps.append(app(5950, "notion.id", "Notion", activatedAgo: 300, windows: 1))
         return s
     }
 
@@ -419,6 +440,7 @@ enum Fixtures {
         case "chrome40": chrome40
         case "freeflowIdle": freeflowIdle
         case "claude9": claude9
+        case "memory": memoryNormal
         case "dockerIdle": dockerIdle
         case "brewServices": brewServices
         case "menuBarApps": menuBarApps
@@ -716,6 +738,43 @@ func runSelfTest() {
     check(!knows(building, "know:busy:"), "a build under the app in front is expected work")
     check(!knows(ids(Fixtures.quiet), "know:busy:"), "a quiet Mac has no busy row")
 
+    print("memory")
+    let mem = ids(Fixtures.memoryNormal)
+    let memRow = row(mem, "know:memory")
+    func quits(_ f: Finding?) -> [String] { if case .quitApps(let apps) = f?.action { apps.map(\.bundleID) } else { [] } }
+    check(memRow?.offer == true && quits(memRow) == ["com.figma.Desktop"] && memRow?.bytes == 900 << 20 && acts(mem).isEmpty,
+          "31 of 48 GB: the Memory row offers to quit only the app idle in the background: \(quits(memRow))")
+    check(memRow?.why.replacingOccurrences(of: "\u{00A0}", with: " ") == "31 GB of 48 GB in use, which is normal: your Mac isn't short of memory. Biggest: Chrome Beta 8.4 GB, Claude 5 GB. Idle: Figma.",
+          "it says the number is normal, names the biggest (Claude with its sessions) and the idle app: \(memRow?.why ?? "-")")
+    check(row(ids(Fixtures.memoryNormal) { _, s in s.memUsed = 20 << 30 }, "know:memory") == nil, "under half in use, nothing to say")
+    let memShort = ids(Fixtures.memoryNormal) { _, s in s.pressure = 2 }
+    check(row(memShort, "know:memory")?.why.contains("running short") == true, "pressure held for a minute says memory is short")
+    check(row(ids(Fixtures.memoryNormal) { _, s in s.memUsed = 20 << 30; s.swap = 3 << 30 }, "know:memory")?.why.contains("running short") == true,
+          "so does a lot of swap, however little is in use")
+    let memAlone = row(ids(Fixtures.memoryNormal) { _, s in s.apps.removeAll { $0.pid == 5900 } }, "know:memory")
+    check(memAlone?.action == nil && memAlone?.why.replacingOccurrences(of: "\u{00A0}", with: " ").hasSuffix("Biggest: Chrome Beta 8.4 GB, Claude 5 GB, Aside 4 GB.") == true && memAlone?.link != nil,
+          "with nothing idle it only explains, names three and links Activity Monitor: \(memAlone?.why ?? "-")")
+    check(quits(row(ids(Fixtures.memoryNormal) { _, s in
+        s.procs = s.procs.map { $0.pid == 5900 ? Fixtures.proc(5900, 1, "Figma", path: $0.path, ago: 9000, cpu: 0.2, mb: 900) : $0 }
+    }, "know:memory")).isEmpty, "a working app is not idle")
+    check(quits(row(ids(Fixtures.memoryNormal) { _, s in s.apps = s.apps.map { $0.pid == 5900 ? Fixtures.app(5900, "com.figma.Desktop", "Figma", activatedAgo: 1500, modal: true) : $0 } },
+                    "know:memory")).isEmpty, "nor one with a dialog open")
+    check(quits(row(ids(Fixtures.memoryNormal, keep: ["com.figma.Desktop"]), "know:memory")).isEmpty, "nor one on the Always keep list")
+    check(quits(row(ids(Fixtures.memoryNormal) { _, s in s.procs = s.procs.map { $0.pid == 5900 ? Fixtures.proc(5900, 1, "Figma", path: $0.path, ago: 9000, mb: 120) : $0 } },
+                    "know:memory")).isEmpty, "nor a small one")
+    check(!mem.contains { f in quits(f).contains { Safety.essential($0) } } && Safety.essential("at.studio.AsideBrowser"),
+          "browsers (Aside too), Claude, Spotify and WhatsApp are never quit for memory")
+    let memHeavy = ids(Fixtures.heavy) { _, s in s.apps = s.apps.map { $0.pid == 7000 ? Fixtures.app(7000, "com.freemans.freeflow", "FreeFlow") : $0 } }
+    check(acts(memHeavy).contains("app:com.freemans.freeflow") && !quits(row(memHeavy, "know:memory")).contains("com.freemans.freeflow"),
+          "an app with a Running now row is not offered twice")
+    check(row(ids(Fixtures.memoryNormal) { _, s in s.procs += (12..<30).map { Fixtures.proc(5600 + pid_t($0), 5500, "Aside Helper (Renderer)", ago: 15_000, mb: 100) } },
+              "know:tabs:at.studio.AsideBrowser") != nil, "Aside full of tabs is explained like any browser")
+    check(Copy.appName("\u{200E}WhatsApp") == "WhatsApp" && Copy.appName("Google Chrome Beta") == "Chrome Beta" && Copy.list(["A", "B", "C"]) == "A, B and C",
+          "app names read as people say them")
+    check(Copy.verb(.quitApps([.init(pid: 1, bundleID: "a", url: nil, name: "Figma", bytes: 0)])) == "Quit Figma"
+          && Copy.verb(.quitApps([.init(pid: 1, bundleID: "a", url: nil, name: "Figma", bytes: 0), .init(pid: 2, bundleID: "b", url: nil, name: "Notion", bytes: 0)])) == "Quit 2 idle apps",
+          "the button names one app, counts several")
+
     print("safety")
     let hist = Fixtures.history(Fixtures.simIdle)
     let s = hist.last!
@@ -757,8 +816,10 @@ func runSelfTest() {
 
     print("good to know")
     let heavy = ids(Fixtures.heavy, disk: Fixtures.disk)
-    let knowBuckets = heavy.filter { $0.group == .know }.map { $0.bytes / (100 << 20) }
-    check(knowBuckets == knowBuckets.sorted(by: >), "Good to know reads biggest first: \(knowBuckets)")
+    let knowRows = heavy.filter { $0.group == .know }
+    let knowBuckets = knowRows.dropFirst().map { $0.bytes / (100 << 20) }
+    check(knowRows.first?.id == "know:memory" && knowBuckets == knowBuckets.sorted(by: >),
+          "Good to know leads with Memory, then reads biggest first: \(knowRows.first?.id ?? "-") \(knowBuckets)")
     check(heavy.firstIndex { $0.group == .know }.map { i in heavy[..<i].allSatisfy { $0.group != .know } } == true, "explain-only rows come after the rows with a button")
     check(acts(heavy).contains("brew:postgresql@16"), "the heavy Mac has a service row: \(acts(heavy))")
     let tabsLink = heavy.first { $0.id == "know:tabs:com.google.Chrome.beta" }?.link
@@ -949,7 +1010,7 @@ func runSelfTest() {
     let withButton = ["know:claude", "know:menubar:", "know:busy:", "know:db:", "know:awake:", "know:cache:", "know:appcache:", "know:trash",
                       "know:runtime:", "know:device:", "know:worktrees-finished:", "know:worktrees-unmerged:", "know:worktrees-local:",
                       "know:leftover"]
-    let explainOnly = ["know:tabs:", "know:spotlight", "know:memory", "know:backlog", "know:worktrees-dirty:", "know:scratch-work"]
+    let explainOnly = ["know:tabs:", "know:spotlight", "know:backlog", "know:worktrees-dirty:", "know:scratch-work"]
     for prefix in withButton {
         let rows = everything.filter { $0.id.hasPrefix(prefix) }
         check(!rows.isEmpty && rows.allSatisfy(\.offer), "\(prefix) rows have a button (\(rows.count))")
